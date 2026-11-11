@@ -59,3 +59,10 @@ bun run lint && bun run check-types
 ```
 
 See [AGENTS.md](AGENTS.md) for the layout and conventions.
+
+## License
+
+Lunar Spice is licensed under the [GNU Affero General Public License v3.0](LICENSE) or
+later. You may use, change, and redistribute it for any purpose, including commercial
+ones. If you run a modified version as a network service, you must offer its complete
+source code to the people who use it. Lunar Spice comes with no warranty of any kind.
