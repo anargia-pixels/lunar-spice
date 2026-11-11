@@ -9,6 +9,8 @@ export type ElementKind =
   | "label"
   | "probe"
   | "resistor"
+  | "potentiometer"
+  | "variable-resistor"
   | "capacitor"
   | "inductor"
   | "voltage-source"

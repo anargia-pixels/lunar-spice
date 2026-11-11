@@ -15,6 +15,12 @@ const GLYPHS: Record<ToolId | "more", ReactNode> = {
     </>
   ),
   resistor: <path d="M2 12h4l1.5-4 3 8 3-8 3 8 1.5-4h4" />,
+  potentiometer: (
+    <path d="M2 16h4l1.5-4 3 8 3-8 3 8 1.5-4h4M12 3v6M9 6l3 3 3-3" />
+  ),
+  "variable-resistor": (
+    <path d="M2 16h4l1.5-4 3 8 3-8 3 8 1.5-4h4M8 20 17 6M17 6h-3M17 6v3" />
+  ),
   capacitor: <path d="M2 12h8.5M10.5 6v12M13.5 6v12M13.5 12H22" />,
   inductor: (
     <path d="M2 13h2.5a2.5 2.5 0 0 1 5 0 2.5 2.5 0 0 1 5 0 2.5 2.5 0 0 1 5 0H22" />

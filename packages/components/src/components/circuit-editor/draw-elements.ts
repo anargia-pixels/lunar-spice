@@ -14,6 +14,10 @@ import {
   LinearRegulator,
 } from "@lunar-spice/simulator/elements/integrated-circuits";
 import { OpAmp } from "@lunar-spice/simulator/elements/op-amp";
+import {
+  Potentiometer,
+  VariableResistor,
+} from "@lunar-spice/simulator/elements/passive";
 import { SchmittTrigger } from "@lunar-spice/simulator/elements/schmitt-trigger";
 import {
   Bjt,
@@ -77,6 +81,8 @@ export class SchematicPainter {
     label: (element) => this.drawLabel(element),
     probe: (element) => this.drawProbe(element),
     resistor: (element) => this.drawResistor(element),
+    potentiometer: (element) => this.drawPotentiometer(element),
+    "variable-resistor": (element) => this.drawVariableResistor(element),
     capacitor: (element) => this.drawCapacitor(element),
     inductor: (element) => this.drawInductor(element),
     "voltage-source": (element) => this.drawVoltageSource(element),
@@ -376,13 +382,13 @@ export class SchematicPainter {
     this.valueLabel(element, 18);
   }
 
-  private drawResistor(element: CircuitElement) {
-    const [a, b] = this.bodyEnds(element, 32);
-    const [first = 0, second = 0] = element.volts;
-
-    this.line(element.start, a, this.voltageColor(first));
-    this.line(b, element.end, this.voltageColor(second));
-
+  /** The resistor body between `a` and `b`, shaded from one post's voltage to the other's. */
+  private drawResistorBody(
+    a: Point,
+    b: Point,
+    startVoltage: number,
+    endVoltage: number,
+  ) {
     if (this.options.resistorStyle === "iec") {
       const corners = [
         interpolate(a, b, 0, 6),
@@ -392,7 +398,7 @@ export class SchematicPainter {
         interpolate(a, b, 0, 6),
       ];
 
-      this.shadedPath(corners, first, second);
+      this.shadedPath(corners, startVoltage, endVoltage);
     } else {
       const zigzag = [a];
 
@@ -401,11 +407,76 @@ export class SchematicPainter {
       }
 
       zigzag.push(b);
-      this.shadedPath(zigzag, first, second);
+      this.shadedPath(zigzag, startVoltage, endVoltage);
     }
+  }
 
+  /** An arrow from `from` to `to`, with a head at `to`, in `color`. */
+  private arrow(from: Point, to: Point, color: string) {
+    this.line(from, to, color);
+
+    const angle = Math.atan2(to.y - from.y, to.x - from.x);
+
+    for (const spread of [-0.5, 0.5]) {
+      this.line(
+        to,
+        {
+          x: to.x - Math.cos(angle + spread) * 7,
+          y: to.y - Math.sin(angle + spread) * 7,
+        },
+        color,
+      );
+    }
+  }
+
+  private drawResistor(element: CircuitElement) {
+    const [a, b] = this.bodyEnds(element, 32);
+    const [first = 0, second = 0] = element.volts;
+
+    this.line(element.start, a, this.voltageColor(first));
+    this.line(b, element.end, this.voltageColor(second));
+    this.drawResistorBody(a, b, first, second);
     this.dots([element.start, element.end], 0);
     this.valueLabel(element);
+  }
+
+  private drawPotentiometer(element: CircuitElement) {
+    if (!(element instanceof Potentiometer)) {
+      return;
+    }
+
+    const [a, b] = this.bodyEnds(element, 32);
+    const [first = 0, second = 0, wiper = 0] = element.volts;
+    const contact = element.wiperContact();
+    const wiperPost = element.posts()[2];
+
+    this.line(element.start, a, this.voltageColor(first));
+    this.line(b, element.end, this.voltageColor(second));
+    this.drawResistorBody(a, b, first, second);
+
+    if (wiperPost) {
+      this.arrow(wiperPost, contact, this.voltageColor(wiper));
+      this.dots([wiperPost, contact], 2);
+    }
+
+    this.dots([element.start, contact], 0);
+    this.dots([contact, element.end], 1);
+    this.valueLabel(element);
+  }
+
+  private drawVariableResistor(element: CircuitElement) {
+    if (!(element instanceof VariableResistor)) {
+      return;
+    }
+
+    const [a, b] = this.bodyEnds(element, 32);
+
+    this.drawResistor(element);
+    this.arrow(
+      interpolate(a, b, 0.2, 10),
+      interpolate(a, b, 0.8, -10),
+      this.outlineColor(),
+    );
   }
 
   private drawCapacitor(element: CircuitElement) {

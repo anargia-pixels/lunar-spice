@@ -14,7 +14,13 @@ import {
   FixedRegulator,
 } from "./elements/integrated-circuits";
 import { OpAmp } from "./elements/op-amp";
-import { Capacitor, Inductor, Resistor } from "./elements/passive";
+import {
+  Capacitor,
+  Inductor,
+  Potentiometer,
+  Resistor,
+  VariableResistor,
+} from "./elements/passive";
 import {
   InvertingSchmittTrigger,
   SchmittTrigger,
@@ -102,6 +108,8 @@ const ELEMENT_CLASSES: Record<ElementKind, ElementClass> = {
   label: NetLabel,
   probe: Probe,
   resistor: Resistor,
+  potentiometer: Potentiometer,
+  "variable-resistor": VariableResistor,
   capacitor: Capacitor,
   inductor: Inductor,
   "voltage-source": VoltageSource,
@@ -124,14 +132,22 @@ const ELEMENT_CLASSES: Record<ElementKind, ElementClass> = {
 
 /**
  * Element classes by the type token that starts their line, from a default of each.
- * Falstad gives the inverting Schmitt trigger its own type, so it has a class too.
+ * Falstad gives the inverting Schmitt trigger its own type, so it has a class too. The
+ * two-post potentiometer shares the resistor's `r`; Resistor.read hands its flagged
+ * lines to VariableResistor, so the first class for a type wins here.
  */
-const CLASSES_BY_DUMP_TYPE = new Map(
-  [...Object.values(ELEMENT_CLASSES), InvertingSchmittTrigger].map((type) => [
-    new type(0, 0, 0, 0).dumpType,
-    type,
-  ]),
-);
+const CLASSES_BY_DUMP_TYPE = new Map<string, ElementClass>();
+
+for (const type of [
+  ...Object.values(ELEMENT_CLASSES),
+  InvertingSchmittTrigger,
+]) {
+  const dumpType = new type(0, 0, 0, 0).dumpType;
+
+  if (!CLASSES_BY_DUMP_TYPE.has(dumpType)) {
+    CLASSES_BY_DUMP_TYPE.set(dumpType, type);
+  }
+}
 
 /** Creates an element of `kind` with default values, spanning the two points. */
 export function createElement(

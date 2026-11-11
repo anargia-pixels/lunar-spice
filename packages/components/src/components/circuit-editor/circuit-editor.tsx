@@ -92,8 +92,8 @@ const PRIMARY_TOOLS = TOOLS.filter((tool) => tool.isPrimary);
 
 const MORE_TOOLS = TOOLS.filter((tool) => !tool.isPrimary);
 
-/** The More menu's tools under their group headings. */
-const MORE_GROUPS = groupTools(MORE_TOOLS);
+/** Every tool, grouped, so the menu holds the bar's parts as well as the rest. */
+const MENU_GROUPS = groupTools(TOOLS);
 
 /** The floating bar of tools: Select, the common parts, then More for the rest. */
 function ToolBar({
@@ -139,12 +139,12 @@ function ToolBar({
       })}
       <Separator orientation="vertical" className="mx-1 h-5" />
       <DropdownMenu>
-        <Hint label="More components" side="bottom">
+        <Hint label="Components" side="bottom">
           <DropdownMenuTrigger
             render={
               <Toggle
                 size="icon-sm"
-                aria-label="More components"
+                aria-label="Components"
                 pressed={moreTool !== undefined}
               />
             }
@@ -153,7 +153,7 @@ function ToolBar({
           </DropdownMenuTrigger>
         </Hint>
         <DropdownMenuContent align="end" className="w-76">
-          {MORE_GROUPS.map(({ title, tools }, index) => (
+          {MENU_GROUPS.map(({ title, tools }, index) => (
             <Fragment key={title}>
               {index > 0 && <DropdownMenuSeparator />}
               <DropdownMenuGroup>
