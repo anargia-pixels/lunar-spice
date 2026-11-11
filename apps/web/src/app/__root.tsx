@@ -1,7 +1,12 @@
 import { HeadContent, Scripts, createRootRoute } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
+import { SITE_URL } from "@/lib/seo";
+
 import appCss from "@/app/globals.css?url";
+
+/** The 1200×630 social preview image every page shares. */
+const OG_IMAGE_URL = `${SITE_URL}/landing/og.jpg`;
 
 export const Route = createRootRoute({
   head: () => ({
@@ -13,6 +18,15 @@ export const Route = createRootRoute({
       { name: "theme-color", content: "#181825" }, // Catppuccin Mocha mantle.
       { property: "og:site_name", content: "Lunar Spice" },
       { property: "og:type", content: "website" },
+      { property: "og:image", content: OG_IMAGE_URL },
+      { property: "og:image:width", content: "1200" },
+      { property: "og:image:height", content: "630" },
+      {
+        property: "og:image:alt",
+        content: "A common-emitter amplifier simulated in Lunar Spice",
+      },
+      { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:image", content: OG_IMAGE_URL },
     ],
     links: [
       { rel: "stylesheet", href: appCss },

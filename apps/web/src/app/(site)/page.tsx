@@ -7,10 +7,12 @@ import { pageHead } from "@/lib/seo";
 
 export const Route = createFileRoute("/(site)/")({
   head: () =>
-    pageHead(
-      "Lunar Spice: an interactive circuit simulator",
-      "Draw a circuit and watch current flow, then run DC, AC and transient analyses. Opens Falstad circuits. Runs in your browser, on Linux and on macOS.",
-    ),
+    pageHead({
+      title: "Lunar Spice: an interactive circuit simulator",
+      description:
+        "Draw a circuit and watch current flow, then run DC, AC and transient analyses. Opens Falstad circuits. Runs in your browser, on Linux and on macOS.",
+      path: "/",
+    }),
   component: LandingPage,
 });
 

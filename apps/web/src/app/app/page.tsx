@@ -13,10 +13,12 @@ const Editor = lazy<ComponentType>(() =>
 
 export const Route = createFileRoute("/app/")({
   head: () =>
-    pageHead(
-      "Lunar Spice web app",
-      "Draw a circuit and simulate it in your browser. Circuits stay in your browser's storage.",
-    ),
+    pageHead({
+      title: "Lunar Spice web app",
+      description:
+        "Draw a circuit and simulate it in your browser. Circuits stay in your browser's storage.",
+      path: "/app",
+    }),
   ssr: false,
   component: () => (
     <Suspense>
