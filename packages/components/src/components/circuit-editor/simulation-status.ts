@@ -3,10 +3,6 @@ export type SimulationStatus = {
   isRunning: boolean;
   /** Simulated time in seconds. */
   time: number;
-  /** Circuit seconds simulated per second lately; below the set speed when it lags. */
-  achievedSpeed: number;
-  /** True while the circuit cannot keep up with the set speed. */
-  isLagging: boolean;
   error: string | null;
   /** True when the circuit has a microphone or a speaker. */
   usesSound: boolean;
@@ -18,8 +14,6 @@ export type SimulationStatus = {
 export const INITIAL_STATUS: SimulationStatus = {
   isRunning: false,
   time: 0,
-  achievedSpeed: 0,
-  isLagging: false,
   error: null,
   usesSound: false,
   audioError: null,

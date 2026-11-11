@@ -45,11 +45,6 @@ export function speedMultiplier(settings: SimulationSettings) {
   return STEPS_PER_SPEED_UNIT * settings.speed * settings.timeStep;
 }
 
-/** Returns the iteration count that runs `multiplier` × real time at `timeStep`. */
-export function speedForMultiplier(multiplier: number, timeStep: number) {
-  return multiplier / (STEPS_PER_SPEED_UNIT * timeStep);
-}
-
 /**
  * Interactive steps a second at every speed. The time step follows the speed, so a slower
  * speed simulates in finer detail, and the step count stays one a heavy circuit (several

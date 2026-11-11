@@ -22,26 +22,11 @@ const FRAME_BUDGET_MS = 14;
 /** While only the time moves, the status is reported at most this often. */
 const STATUS_INTERVAL_MS = 100;
 
-/** How quickly the achieved speed follows each frame's, from 0 to 1. */
-const SPEED_SMOOTHING = 0.1;
-
-/**
- * Shares of the set speed below which the simulation counts as falling behind, and above
- * which it counts as keeping up again. The gap keeps the status from flickering.
- */
-const LAG_ENTER = 0.85;
-
-const LAG_EXIT = 0.95;
-
 /** How far from 1× a speed may be and still count as real time, for sound. */
 const REAL_TIME_TOLERANCE = 1e-6;
 
-/** The status without the values that change every frame, to compare by. */
-function steadyPart({
-  time: _time,
-  achievedSpeed: _achievedSpeed,
-  ...rest
-}: SimulationStatus) {
+/** The status without the simulated time, to compare by. */
+function steadyPart({ time: _time, ...rest }: SimulationStatus) {
   return JSON.stringify(rest);
 }
 
@@ -52,9 +37,9 @@ export type RunCallbacks = {
 
 /**
  * The simulation that runs while the schematic is on screen: it steps the circuit each
- * frame at the set speed, measures whether it keeps up, records scopes, moves the
- * current dots and plays sound. Edits rebuild it; elements keep their state across
- * rebuilds, so a running circuit picks up where it left off.
+ * frame at the set speed, records scopes, moves the current dots and plays sound. Edits
+ * rebuild it; elements keep their state across rebuilds, so a running circuit picks up
+ * where it left off.
  */
 export class InteractiveRun {
   private circuit: Circuit | null = null;
@@ -63,9 +48,6 @@ export class InteractiveRun {
   private time = 0;
   private error: string | null = null;
   private faultSet = new Set<CircuitElement>();
-  /** 0 until the first frame after a start, which then sets it outright. */
-  private achievedSpeed = 0;
-  private isLagging = false;
   private stepRemainder = 0; // part of a step carried to the next frame
   private lastStatus: SimulationStatus | null = null;
   private lastStatusTime = 0;
@@ -130,7 +112,6 @@ export class InteractiveRun {
   start(circuit: Circuit) {
     this.time = 0;
     this.setScopes([]);
-    this.restartSpeedMeasure();
     this.rebuild(circuit);
   }
 
@@ -148,7 +129,6 @@ export class InteractiveRun {
 
   private setRunning(isRunning: boolean) {
     this.isRunning = isRunning;
-    this.restartSpeedMeasure();
 
     if (isRunning && this.error && this.circuit) {
       this.rebuild(this.circuit);
@@ -164,8 +144,6 @@ export class InteractiveRun {
 
   /** Follows new settings: a new time step rebuilds the companion models. */
   updateSettings() {
-    this.restartSpeedMeasure();
-
     const { simulation, circuit } = this;
 
     if (circuit && simulation?.system.timeStep !== circuit.settings.timeStep) {
@@ -194,7 +172,6 @@ export class InteractiveRun {
 
     const steps = Math.floor(wanted);
     const deadline = performance.now() + FRAME_BUDGET_MS;
-    const startTime = simulation.time;
 
     this.stepRemainder = Math.min(wanted - steps, 1);
 
@@ -216,26 +193,10 @@ export class InteractiveRun {
 
     this.audio.flush();
 
-    // Smooths the achieved speed and compares it with the set speed.
-    if (elapsedMs > 0) {
-      const speed = (simulation.time - startTime) / (elapsedMs / 1000);
-
-      this.achievedSpeed =
-        this.achievedSpeed === 0
-          ? speed
-          : this.achievedSpeed + (speed - this.achievedSpeed) * SPEED_SMOOTHING;
-      this.isLagging =
-        this.achievedSpeed < target * (this.isLagging ? LAG_EXIT : LAG_ENTER);
-    }
-
     this.time = simulation.time;
 
     if (showCurrentDots) {
-      this.dots.advance(
-        circuit.elements,
-        elapsedMs,
-        circuit.settings.currentSpeed,
-      );
+      this.dots.advance(circuit.elements, elapsedMs);
     }
 
     this.emitStatus();
@@ -320,12 +281,6 @@ export class InteractiveRun {
     this.callbacks.onScopesChange(scopes);
   }
 
-  /** Measures the speed afresh, after a pause or a new speed. */
-  private restartSpeedMeasure() {
-    this.achievedSpeed = 0;
-    this.isLagging = false;
-  }
-
   /** Plays sound only while the run steps at 1×: sound needs simulated time at real time. */
   private updateAudio() {
     const isRealTime =
@@ -355,8 +310,6 @@ export class InteractiveRun {
     return {
       isRunning: this.isStepping,
       time: this.time,
-      achievedSpeed: this.achievedSpeed,
-      isLagging: this.isLagging,
       error:
         this.error && this.faultSet.size > 0
           ? `${this.error} The parts involved are marked on the schematic.`

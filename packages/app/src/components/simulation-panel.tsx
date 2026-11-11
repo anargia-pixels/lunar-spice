@@ -4,7 +4,6 @@ import {
   RotateLeft01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import type { SimulationStatus } from "@lunar-spice/components/circuit-editor/simulation-status";
 import { Hint } from "@lunar-spice/components/hint/hint";
 import { RunIcon } from "@lunar-spice/components/run-icon/run-icon";
 import { SidebarResizeRail } from "@lunar-spice/components/sidebar/sidebar-resize-rail";
@@ -38,8 +37,8 @@ import { Slider } from "@lunar-spice/components/ui/slider";
 import { Spinner } from "@lunar-spice/components/ui/spinner";
 import {
   readSettings,
+  settingsForSpeed,
   type SimulationSettings,
-  speedForMultiplier,
   speedMultiplier,
 } from "@lunar-spice/simulator/circuit";
 import {
@@ -131,21 +130,6 @@ function SpeedTicks() {
       </div>
     </div>
   );
-}
-
-/** What the simulation is doing against its set speed, on one line that never reflows. */
-function speedStatus(status: SimulationStatus) {
-  if (!status.isRunning) {
-    return "Paused";
-  }
-
-  if (!status.isLagging) {
-    return "Keeping up";
-  }
-
-  return status.achievedSpeed > 0
-    ? `Falling behind: running at ${speedLabel(status.achievedSpeed)}`
-    : "Falling behind";
 }
 
 /**
@@ -270,8 +254,8 @@ function PanelSection({
 }
 
 /**
- * Controls for the interactive simulation: run, pause and reset, speeds, the time step
- * and the wire color scale. A new time step keeps the circuit time per second.
+ * Controls for the interactive simulation: run, pause and reset, the speed and the wire
+ * color scale. The speed sets the time step, so there is nothing else to tune.
  */
 function InteractiveSection() {
   const status = useSimulationStore((state) => state.status);
@@ -326,19 +310,11 @@ function InteractiveSection() {
             const step = first === undefined ? undefined : SPEED_STEPS[first];
 
             if (step !== undefined) {
-              update({ speed: speedForMultiplier(step, settings.timeStep) });
+              update(settingsForSpeed(step));
             }
           }}
         />
         <SpeedTicks />
-        <p
-          className={cn(
-            "text-xs tabular-nums",
-            status.isLagging ? "text-destructive" : "text-muted-foreground",
-          )}
-        >
-          {speedStatus(status)}
-        </p>
         <FieldDescription>
           {`${formatSi(multiplier, "s")} of circuit time per second; 1× is real time.`}
           {status.usesSound &&
@@ -351,30 +327,6 @@ function InteractiveSection() {
           <AlertDescription>{status.audioError}</AlertDescription>
         </Alert>
       )}
-      <Field>
-        <FieldLabel>Current speed</FieldLabel>
-        <Slider
-          aria-label="Current speed"
-          min={1}
-          max={100}
-          value={settings.currentSpeed}
-          onValueChange={(position) => {
-            const [first] = Array.isArray(position) ? position : [position];
-
-            if (first !== undefined) {
-              update({ currentSpeed: first });
-            }
-          }}
-        />
-      </Field>
-      <SiField
-        label="Time step"
-        unit="s"
-        value={settings.timeStep}
-        onCommit={(timeStep) =>
-          update({ timeStep, speed: speedForMultiplier(multiplier, timeStep) })
-        }
-      />
       <SiField
         label="Full-color voltage"
         unit="V"
