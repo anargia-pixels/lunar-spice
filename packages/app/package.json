@@ -1,0 +1,33 @@
+{
+  "name": "@lunar-spice/app",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./app.css": "./src/app.css",
+    "./lib/*": "./src/lib/*.ts",
+    "./*": "./src/components/*.tsx"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hugeicons/core-free-icons": "catalog:",
+    "@hugeicons/react": "catalog:",
+    "@lunar-spice/components": "workspace:*",
+    "@lunar-spice/simulator": "workspace:*",
+    "@lunar-spice/utils": "workspace:*",
+    "zustand": "catalog:"
+  },
+  "peerDependencies": {
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "typescript": "catalog:"
+  }
+}

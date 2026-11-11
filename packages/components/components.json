@@ -1,0 +1,21 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "base-nova",
+  "rsc": false,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "src/styles/globals.css",
+    "baseColor": "neutral",
+    "cssVariables": true,
+    "prefix": ""
+  },
+  "iconLibrary": "hugeicons",
+  "aliases": {
+    "components": "@lunar-spice/components",
+    "utils": "@lunar-spice/utils/cn",
+    "ui": "@lunar-spice/components/ui",
+    "lib": "@lunar-spice/components/lib",
+    "hooks": "@lunar-spice/components/hooks"
+  }
+}

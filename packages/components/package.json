@@ -1,0 +1,45 @@
+{
+  "name": "@lunar-spice/components",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./ui/*": "./src/components/ui/*.tsx",
+    "./hooks/*": "./src/hooks/*.ts",
+    "./lib/*": "./src/lib/*.ts",
+    "./globals.css": "./src/styles/globals.css",
+    "./themes/*": "./src/themes/*.ts",
+    "./circuit-editor/editor-controller": "./src/components/circuit-editor/editor-controller.ts",
+    "./circuit-editor/simulation-status": "./src/components/circuit-editor/simulation-status.ts",
+    "./circuit-editor/display-options": "./src/components/circuit-editor/display-options.ts",
+    "./*": "./src/components/*.tsx"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@base-ui/react": "catalog:",
+    "@hugeicons/core-free-icons": "catalog:",
+    "@hugeicons/react": "catalog:",
+    "@lunar-spice/simulator": "workspace:*",
+    "@lunar-spice/utils": "workspace:*",
+    "@shadcn/react": "catalog:",
+    "class-variance-authority": "catalog:",
+    "framer-motion": "catalog:",
+    "react-resizable-panels": "catalog:",
+    "shadcn": "catalog:",
+    "tw-animate-css": "catalog:"
+  },
+  "peerDependencies": {
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "tailwindcss": "catalog:",
+    "typescript": "catalog:"
+  }
+}

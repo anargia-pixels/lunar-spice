@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "jsx": "react-jsx",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["node", "electron-vite/node", "vite/client"]
+  },
+  "include": [
+    "electron.vite.config.ts",
+    "package.json",
+    "src/electron/**/*.ts",
+    "src/lib/bridge.ts"
+  ]
+}

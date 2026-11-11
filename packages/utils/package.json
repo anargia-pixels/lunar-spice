@@ -1,0 +1,22 @@
+{
+  "name": "@lunar-spice/utils",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./cn": "./src/cn.ts",
+    "./error-message": "./src/error-message.ts",
+    "./fonts.css": "./src/fonts.css",
+    "./relative-time": "./src/relative-time.ts"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "cn": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
+  }
+}

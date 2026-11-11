@@ -1,0 +1,8 @@
+{
+  "target": "react",
+  "routesDirectory": "./src/app",
+  "generatedRouteTree": "./src/routeTree.gen.ts",
+  "indexToken": "page",
+  "routeToken": { "regex": "^(layout|route)$" },
+  "routeFileIgnorePattern": "^(?!(page|layout|route|__root)\\.tsx?$).+\\.(tsx?|css)$"
+}

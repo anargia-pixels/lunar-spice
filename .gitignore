@@ -1,0 +1,35 @@
+# Dependencies
+node_modules
+
+# Build outputs
+dist
+out
+build
+*.tsbuildinfo
+
+# Environment variables
+.env*
+!.env.example
+
+# IDEs and editors
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea
+*.swp
+*~
+.DS_Store
+
+# Logs
+*.log
+
+# Turbo
+.turbo
+
+# TanStack Start's build cache
+.tanstack
+
+# Misc
+*.tgz
+.cache
+tmp

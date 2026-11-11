@@ -1,0 +1,10 @@
+@import "@lunar-spice/components/globals.css";
+@import "@lunar-spice/app/app.css";
+
+@layer base {
+  html,
+  body,
+  #root {
+    @apply h-full;
+  }
+}

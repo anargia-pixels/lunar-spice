@@ -1,0 +1,91 @@
+{
+  "name": "desktop",
+  "version": "0.1.0",
+  "description": "Lunar Spice circuit simulator",
+  "productName": "Lunar Spice",
+  "desktopName": "lunar-spice.desktop",
+  "private": true,
+  "type": "module",
+  "main": "./out/main/main.js",
+  "scripts": {
+    "dev": "bun run setup:electron && electron-vite dev --watch",
+    "setup:electron": "install-electron",
+    "build": "electron-vite build",
+    "package": "bun run build && electron-builder --publish never",
+    "preview": "bun run setup:electron && electron-vite preview",
+    "check-types": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
+  },
+  "dependencies": {
+    "@hugeicons/core-free-icons": "catalog:",
+    "@hugeicons/react": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@lunar-spice/app": "workspace:*",
+    "@lunar-spice/components": "workspace:*",
+    "@tailwindcss/vite": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "^5.1.0",
+    "electron": "^45.2.1",
+    "electron-builder": "catalog:",
+    "electron-vite": "^5.0.0",
+    "tailwindcss": "catalog:",
+    "typescript": "catalog:",
+    "vite": "^7.3.0"
+  },
+  "build": {
+    "appId": "com.lunarspice.app",
+    "productName": "Lunar Spice",
+    "directories": {
+      "buildResources": "../../assets/icons",
+      "output": "dist"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "npmRebuild": false,
+    "fileAssociations": [
+      {
+        "ext": [
+          "circuit"
+        ],
+        "name": "Circuit",
+        "role": "Editor",
+        "mimeType": "application/x-lunar-spice-circuit"
+      }
+    ],
+    "linux": {
+      "icon": "256x256.png",
+      "artifactName": "lunar-spice-linux-${arch}.${ext}",
+      "executableName": "lunar-spice",
+      "target": [
+        "zip"
+      ],
+      "category": "Science",
+      "maintainer": "Lunar Spice contributors"
+    },
+    "mac": {
+      "icon": "icon.icns",
+      "artifactName": "lunar-spice-macos-${arch}.${ext}",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.education",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Microphones in your circuits can hear your computer's microphone."
+      },
+      "identity": "-",
+      "hardenedRuntime": false,
+      "notarize": false
+    }
+  }
+}

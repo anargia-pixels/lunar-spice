@@ -1,0 +1,64 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "useTabs": false,
+  "tabWidth": 2,
+  "printWidth": 80,
+  "singleQuote": false,
+  "jsxSingleQuote": false,
+  "proseWrap": "always",
+  "quoteProps": "as-needed",
+  "trailingComma": "all",
+  "semi": true,
+  "arrowParens": "always",
+  "bracketSameLine": false,
+  "bracketSpacing": true,
+  "sortImports": true,
+  "sortPackageJson": false,
+  "sortTailwindcss": {
+    "functions": ["clsx", "cva", "cn"]
+  },
+  "ignorePatterns": [
+    "**/.next",
+    "**/dist",
+    "**/.turbo",
+    "**/.nx",
+    "**/dev-dist",
+    "**/.zed",
+    "**/.vscode",
+    "**/routeTree.gen.ts",
+    "**/uniwind-types.d.ts",
+    "**/src-tauri",
+    "**/.nuxt",
+    "bts.jsonc",
+    "**/.expo",
+    "**/.wrangler",
+    "**/.alchemy",
+    "**/.svelte-kit",
+    "**/wrangler.jsonc",
+    "**/.source",
+    "**/convex/_generated",
+    ".agent/**",
+    ".agents/**",
+    ".claude/**",
+    ".codex/**",
+    ".continue/**",
+    ".cursor/**",
+    ".gemini/**",
+    ".opencode/**",
+    ".pi/**",
+    ".roo/**",
+    ".windsurf/**",
+    "**/out",
+    "**/.output",
+    "**/.tanstack",
+    "tools/oxlint/anti-slop/**"
+  ],
+  "overrides": [
+    {
+      "files": ["**/*.md", "**/*.mdx"],
+      "options": {
+        "printWidth": 90
+      }
+    }
+  ]
+}

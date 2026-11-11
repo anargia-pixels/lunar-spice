@@ -1,0 +1,38 @@
+[data-sidebar-file-item] [data-slot="sidebar-menu-button"] {
+  line-height: 1;
+}
+
+/* The label truncates, so its overflow is hidden; room for descenders keeps "g" and "y" whole. */
+[data-sidebar-file-item] [data-slot="sidebar-menu-button"] > span:last-child {
+  margin-block: -0.15em;
+  padding-block: 0.15em;
+}
+
+/* The access time keeps clear of the label, then gives way to the action button. */
+[data-sidebar-file-item]:has([data-slot="sidebar-menu-badge"])
+  [data-slot="sidebar-menu-button"] {
+  padding-right: 4rem;
+}
+
+[data-sidebar-file-item] [data-slot="sidebar-menu-badge"] {
+  color: var(--muted-foreground);
+  font-weight: 400;
+  transition: opacity 200ms ease-out;
+}
+
+[data-sidebar-file-item]
+  [data-slot="sidebar-menu-button"][data-active]
+  ~ [data-slot="sidebar-menu-badge"] {
+  color: var(--sidebar-primary-foreground);
+}
+
+[data-sidebar-file-item]:is(:hover, :focus-within, :has([aria-expanded="true"]))
+  [data-slot="sidebar-menu-badge"] {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-sidebar-file-item] [data-slot="sidebar-menu-badge"] {
+    transition: none;
+  }
+}

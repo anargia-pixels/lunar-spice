@@ -1,0 +1,5 @@
+[install]
+linker = "isolated"
+# Install packages only after 7 days, except explicit exemptions below.
+minimumReleaseAge = 604800
+minimumReleaseAgeExcludes = ["@shadcn/lint", "cn", "electron"]

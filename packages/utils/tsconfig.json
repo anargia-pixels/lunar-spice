@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // Fetch, Web Crypto and the other web globals every app runtime has, without the DOM.
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}

@@ -1,0 +1,10 @@
+/* Set on shadcn's sidebar wrapper by the rail while it is dragged. */
+[data-slot="sidebar-wrapper"][data-resizing] {
+  cursor: col-resize;
+  user-select: none;
+
+  & [data-slot="sidebar-gap"],
+  & [data-slot="sidebar-container"] {
+    transition: none;
+  }
+}

@@ -1,0 +1,165 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "react", "jsx-a11y"],
+  "jsPlugins": [
+    "@shadcn/lint",
+    "./tools/oxlint/oxc-rules.mjs",
+    {
+      "name": "anti-slop",
+      "specifier": "./tools/oxlint/anti-slop/index.ts"
+    }
+  ],
+  "settings": {
+    "shadcn": {
+      "ui": "@lunar-spice/components/ui"
+    }
+  },
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    // oxc native lints
+    "react/exhaustive-deps": "warn",
+    "react/no-array-index-key": "warn",
+    "react/no-danger": "warn",
+    "jsx-a11y/no-static-element-interactions": "warn",
+    "oxc/no-accumulating-spread": "error",
+    "no-param-reassign": "error",
+    "typescript/prefer-as-const": "error",
+    "default-param-last": "error",
+    "typescript/prefer-enum-initializers": "error",
+    "react/self-closing-comp": "error",
+    "one-var": ["error", "never"],
+    "lunar-spice/no-unused-template-literal": "error",
+    "no-restricted-globals": [
+      "error",
+      "parseInt",
+      "parseFloat",
+      "NaN",
+      "Infinity"
+    ],
+    "typescript/no-inferrable-types": "error",
+    "lunar-spice/no-useless-else": "error",
+    // anti slop rules
+    "anti-slop/no-array-filter-map": "error",
+    "anti-slop/no-reduce-accumulator-copy": "error",
+    "anti-slop/no-chained-type-assertions": "error",
+    "anti-slop/no-conditional-empty-object-spread": "error",
+    "anti-slop/no-known-value-widening": "error",
+    "anti-slop/no-module-mocking": "error",
+    "anti-slop/no-object-parameters": "error",
+    "anti-slop/no-reflect-apply": "error",
+    "anti-slop/no-reflect-get": "error",
+    "anti-slop/no-runtime-typeof": "error",
+    "anti-slop/no-shape-in-symbol-names": "error",
+    "anti-slop/no-unknown-parameters": "error",
+    "anti-slop/no-unknown-returns": "error",
+    "anti-slop/no-unknown-type-aliases": "error",
+    "anti-slop/no-unsafe-dictionary-type": "error",
+    "anti-slop/no-widen-then-assert": "error",
+    "anti-slop/require-readable-spacing": "error",
+    "anti-slop/require-safety-comment-for-type-assertion": "error",
+    // shadcn linter rules
+    "shadcn/no-restyle": [
+      "error",
+      {
+        "allow": ["layout"]
+      }
+    ],
+    "shadcn/no-raw-colors": "error",
+    "shadcn/no-arbitrary-values": "error",
+    "shadcn/no-inline-styles": "error",
+    "shadcn/no-unknown-classes": "error",
+    "shadcn/require-static-classes": "error",
+    "react/forbid-elements": [
+      "error",
+      {
+        "forbid": [
+          {
+            "element": "button",
+            "message": "Use <Button> from @lunar-spice/components/ui/button"
+          },
+          {
+            "element": "input",
+            "message": "Use <Input> from @lunar-spice/components/ui/input"
+          },
+          {
+            "element": "textarea",
+            "message": "Use <Textarea> from @lunar-spice/components/ui/textarea"
+          },
+          {
+            "element": "select",
+            "message": "Use <Select> from @lunar-spice/components/ui/select"
+          },
+          {
+            "element": "a",
+            "message": "Use <Button render={<a />}>"
+          },
+          {
+            "element": "label",
+            "message": "Use <Label> component from shadcn"
+          },
+          {
+            "element": "details",
+            "message": "Use <Accordion> from @lunar-spice/components/ui/accordion"
+          },
+          {
+            "element": "dialog",
+            "message": "Use <Dialog> from @lunar-spice/components/ui/dialog"
+          },
+          {
+            "element": "hr",
+            "message": "Use <Separator> from @lunar-spice/components/ui/separator"
+          },
+          {
+            "element": "progress",
+            "message": "Use <Progress> from @lunar-spice/components/ui/progress"
+          },
+          {
+            "element": "table",
+            "message": "Use <Table> from @lunar-spice/components/ui/table"
+          }
+        ]
+      }
+    ]
+  },
+  "ignorePatterns": [
+    "**/.next",
+    "**/dist",
+    "**/.turbo",
+    "**/.nx",
+    "**/dev-dist",
+    "**/.zed",
+    "**/.vscode",
+    "**/routeTree.gen.ts",
+    "**/src-tauri",
+    "**/.nuxt",
+    "bts.jsonc",
+    "**/.expo",
+    "**/.wrangler",
+    "**/.alchemy",
+    "**/.svelte-kit",
+    "**/wrangler.jsonc",
+    "**/.source",
+    "**/convex/_generated",
+    ".agent/**",
+    ".agents/**",
+    ".claude/**",
+    ".codex/**",
+    ".continue/**",
+    ".cursor/**",
+    ".gemini/**",
+    ".opencode/**",
+    ".pi/**",
+    ".roo/**",
+    ".windsurf/**",
+    "tools/oxlint/anti-slop/**",
+    "**/out",
+    "**/.output",
+    "**/.tanstack",
+    "packages/components/src/components/ui/**"
+  ],
+  "env": {
+    "builtin": true
+  }
+}

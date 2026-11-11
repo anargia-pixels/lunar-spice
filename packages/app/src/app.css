@@ -1,0 +1,3 @@
+/* Apps import this file after the components theme, so Tailwind's source detection
+   only sees the app. Scan this package too, or classes used only here get dropped. */
+@source "./";

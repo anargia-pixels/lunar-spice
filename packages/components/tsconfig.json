@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "noEmit": true,
+    // The shadcn CLI resolves the bare `components` alias through tsconfig;
+    // subpaths resolve through package.json exports.
+    "paths": {
+      "@lunar-spice/components": ["./src/components"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}
