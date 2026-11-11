@@ -1,0 +1,112 @@
+# Builds the desktop packages and deploys the web app when a version tag is pushed.
+# A push to master alone deploys and releases nothing; see RELEASE.md.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build or update
+        required: true
+        type: string
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - run: bun run format:check
+      - run: bun run lint
+      - run: bun run check-types
+      - run: bun run test
+      # The desktop About row and the web About dialog both show the version, so
+      # both packages must carry the tag's version.
+      - name: Check the release version
+        run: |
+          release_version=${RELEASE_TAG#v}
+          test "$(jq -r .version apps/desktop/package.json)" = "$release_version"
+          test "$(jq -r .version apps/web/package.json)" = "$release_version"
+
+  # Each build publishes its asset as soon as it finishes, so a slow or failed
+  # platform does not hold back the other.
+  build:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            script: package:linux
+            asset: lunar-spice-linux-x64.zip
+          - runner: macos-latest
+            script: package:macos:arm64
+            asset: lunar-spice-macos-arm64.dmg
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - run: bun run ${{ matrix.script }}
+      - name: Publish the asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run:
+          .github/scripts/publish-asset.sh "apps/desktop/dist/${{ matrix.asset
+          }}"
+
+  # Runs the Alchemy stack directly: Turbo's strict env mode would drop the
+  # Cloudflare variables.
+  deploy-web:
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - name: Deploy
+        working-directory: packages/infra
+        run: bun run deploy --yes
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

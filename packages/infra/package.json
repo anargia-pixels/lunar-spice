@@ -1,0 +1,24 @@
+{
+  "name": "@lunar-spice/infra",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./alchemy.run": "./alchemy.run.ts",
+    "./names.json": "./names.json"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "deploy": "alchemy deploy --stage production --profile lunarspice"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "@effect/platform-bun": "4.0.5",
+    "@effect/platform-node": "4.0.5",
+    "@effect/platform-node-shared": "4.0.5",
+    "@types/node": "catalog:",
+    "alchemy": "2.0.0-beta.83",
+    "effect": "4.0.5",
+    "typescript": "catalog:",
+    "vite": "8.3.4"
+  }
+}

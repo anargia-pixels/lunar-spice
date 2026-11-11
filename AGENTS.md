@@ -13,7 +13,8 @@ in code, UI copy, docs or conversation, use the terms in [GLOSSARY.md](GLOSSARY.
   `tsr.config.json`): `page.tsx` is an index route, `layout.tsx` a layout. `(site)/` is
   the landing page; `app/` is the simulator at `/app`, which skips SSR and lazy-loads
   `editor.tsx`. Saved circuits live in IndexedDB (`lib/browser-circuits.ts`). Every page
-  is listed in `pages` in `vite.config.ts` and prerendered at build time.
+  is listed in `pages` in `vite.config.ts` and prerendered at build time. `packages/infra`
+  deploys it as the `lunar-spice` Worker on a release tag.
 - `packages/app`: the app both platforms run: shell, sidebar, simulation and results
   panels, settings panes and the zustand stores. Analyses run in `lib/analysis-worker.ts`,
   off the UI thread. Each app supplies storage, file opening, its About rows and its
@@ -32,6 +33,9 @@ in code, UI copy, docs or conversation, use the terms in [GLOSSARY.md](GLOSSARY.
   canvas palette and trace colors, scopes, and keyboard shortcuts.
   `src/styles/globals.css` is the theme.
 - `packages/utils`: shared libs without DOM or React (`cn`, fonts).
+- `packages/infra`: the Alchemy stack (`alchemy.run.ts`) for the web app only: one
+  `lunar-spice` Worker serving `apps/web` prerendered, on `lunarspice.doctorthe113.com`
+  (`names.json`). `bun run deploy` in that package deploys by hand.
 - `tools/oxlint`: custom lint rules, including `anti-slop/*`.
 
 ## Conventions
@@ -63,6 +67,9 @@ in code, UI copy, docs or conversation, use the terms in [GLOSSARY.md](GLOSSARY.
   Roboto Mono, bundled from `packages/utils/src/fonts` so they render offline.
 - Change only what the request names. When a UI term is ambiguous, ask before editing.
 - Commit on the current branch. Ask before committing or creating a new branch.
+- Releases and the web deploy run from version tags, never from a push to `master`. When
+  releasing a new version, read the [release checklist](RELEASE.md) and follow the steps
+  in order.
 - The desktop app is developed for Linux and macOS; Windows is not supported yet. The web
   app targets current Chromium, Firefox and Safari.
 

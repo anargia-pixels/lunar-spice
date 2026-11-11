@@ -10,6 +10,7 @@
     ],
     "catalog": {
       "@base-ui/react": "^1.6.0",
+      "@cloudflare/workers-types": "^5.20260906.1",
       "@hugeicons/core-free-icons": "^4.3.5",
       "@hugeicons/react": "^1.1.10",
       "@oxlint/plugins": "^1.81.0",

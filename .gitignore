@@ -26,6 +26,10 @@ build
 # Turbo
 .turbo
 
+# Cloudflare
+.wrangler
+.alchemy
+
 # TanStack Start's build cache
 .tanstack
 
