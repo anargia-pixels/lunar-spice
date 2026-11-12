@@ -14,16 +14,17 @@ run the analyses you would reach for in Multisim:
 ## Parts
 
 A small set of components, each configurable from its datasheet: pick a real part (1N4148,
-1N4007, 2N3904, BC547B, 2N7000, IRF540N, LM741, TL072, 7805, 7912, LM317, LM337, NE555,
-…), paste a vendor SPICE `.model` card, or type the values yourself.
+1N4007, 2N3904, BC547B, 2N7000, IRF540N, 2N3819, LM741, TL072, 7805, 7912, LM317, LM337,
+NE555, …), paste a vendor SPICE `.model` card, or type the values yourself.
 
 Resistor · capacitor (ESR) · inductor (DCR) · DC and AC sources (internal resistance) ·
 rail · current source · switch, push switch (normally open or closed) and changeover
-switch · diode and Zener · LED · NPN/PNP · N/P-channel MOSFET · op-amp (gain, GBW, slew
-rate, Rin, Rout, offset, swing) · Schmitt trigger, buffer or inverter (thresholds, output
-levels, output resistance, slew rate) · fixed regulator (7805-style) · adjustable
-regulator (LM317-style) · 555 timer · electret microphone (live from your microphone, or a
-test tone) · speaker (plays through your speakers) · voltage probe · net label · ground.
+switch · diode and Zener · LED · NPN/PNP · N/P-channel MOSFET · N/P-channel JFET · op-amp
+(gain, GBW, slew rate, Rin, Rout, offset, swing) · Schmitt trigger, buffer or inverter
+(thresholds, output levels, output resistance, slew rate) · fixed regulator (7805-style) ·
+adjustable regulator (LM317-style) · 555 timer · electret microphone (live from your
+microphone, or a test tone) · speaker (plays through your speakers) · voltage probe · net
+label · ground.
 
 Parts have a fixed size, as in Multisim: a click places one, and `[` `]`, H and V turn or
 mirror it before you click. Only wires stretch. The interactive simulation runs in real
@@ -34,7 +35,13 @@ Wires route as in Multisim and EasyEDA: click to start one, click again for each
 and it ends on the pin or wire you click, on a double-click, or with a right-click or
 Escape. With the select tool, a click on a pin starts a wire from it. A wire or pin that
 lands on the middle of another wire joins it; wires that only cross stay apart. Ends that
-join nothing are ringed and counted under the canvas.
+join nothing are ringed and counted under the canvas. Moving a part keeps it connected:
+its wires stretch along, with a right-angle bend where they would run at a slant, and a
+part that touched it directly gets a new wire.
+
+Each part's name and value can be dragged to a clearer spot, and its name changed in its
+properties (`R1` can become `Rload`). Schematic text uses Poppins or JetBrains Mono, from
+View › Schematic font.
 
 ## Files
 

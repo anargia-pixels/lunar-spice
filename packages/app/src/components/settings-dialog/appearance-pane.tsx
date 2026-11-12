@@ -3,6 +3,8 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import {
   RESISTOR_STYLES,
   type ResistorStyle,
+  SCHEMATIC_FONTS,
+  SCHEMATIC_FONT_KEYS,
 } from "@lunar-spice/components/circuit-editor/display-options";
 import { SettingsPane } from "@lunar-spice/components/settings-dialog/settings-pane";
 import {
@@ -167,7 +169,10 @@ const DISPLAY_SWITCHES = [
   { key: "showGrid", label: "Show grid" },
 ] as const;
 
-/** How the schematic draws: voltage colors, current dots, values, grid and resistor symbols. */
+/**
+ * How the schematic draws: voltage colors, current dots, values, grid, resistor symbols
+ * and the font of its text.
+ */
 function SchematicSettings() {
   const display = useAppearanceStore((state) => state.display);
   const setDisplay = useAppearanceStore((state) => state.setDisplay);
@@ -213,6 +218,34 @@ function SchematicSettings() {
             {RESISTOR_STYLE_KEYS.map((style) => (
               <SelectItem key={style} value={style}>
                 {RESISTOR_STYLES[style]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="flex items-center justify-between gap-6">
+        <span className="text-sm">Schematic font</span>
+        <Select
+          items={SCHEMATIC_FONTS}
+          value={display.schematicFont}
+          onValueChange={(next) => {
+            const font = SCHEMATIC_FONT_KEYS.find((key) => key === next);
+
+            if (font) {
+              setDisplay({ schematicFont: font });
+            }
+          }}
+        >
+          <SelectTrigger
+            className="w-64 justify-between"
+            aria-label="Schematic font"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false}>
+            {SCHEMATIC_FONT_KEYS.map((font) => (
+              <SelectItem key={font} value={font}>
+                {SCHEMATIC_FONTS[font]}
               </SelectItem>
             ))}
           </SelectContent>

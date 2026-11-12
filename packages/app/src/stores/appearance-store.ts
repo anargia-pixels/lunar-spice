@@ -55,6 +55,21 @@ export const useAppearanceStore = create<AppearanceStore>()(
           },
         };
       },
+      // Saved display settings may predate one; new ones start at their default.
+      merge: (persisted, current) => {
+        const saved = persisted instanceof Object ? persisted : {};
+
+        const display =
+          "display" in saved && saved.display instanceof Object
+            ? saved.display
+            : {};
+
+        return {
+          ...current,
+          ...saved,
+          display: { ...DEFAULT_DISPLAY, ...display },
+        };
+      },
     },
   ),
 );

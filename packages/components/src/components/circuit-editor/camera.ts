@@ -5,6 +5,7 @@ import type { Bounds } from "@lunar-spice/simulator/layout";
 export type Insets = {
   top: number;
   bottom: number;
+  right: number;
 };
 
 const MIN_SCALE = 0.25;
@@ -26,7 +27,7 @@ export class Camera {
   private y = 0;
   private scaleValue = 1;
   private size = { width: 0, height: 0 };
-  private insets: Insets = { top: 0, bottom: 0 };
+  private insets: Insets = { top: 0, bottom: 0, right: 0 };
   /** True while it shows the whole drawing; resizes then fit it again. */
   private isFittedToDrawing = false;
   private readonly onViewChange: (scale: number) => void;
@@ -132,19 +133,20 @@ export class Camera {
     const top = this.insets.top + FIT_GUTTER;
     const bottom = this.insets.bottom + FIT_GUTTER;
     const roomHeight = height - top - bottom;
+    const roomWidth = width - this.insets.right - 2 * FIT_GUTTER;
 
     const scale = Math.min(
       MAX_FIT_SCALE,
       Math.max(
         MIN_SCALE,
         Math.min(
-          (width - 2 * FIT_GUTTER) / Math.max(box.right - box.left, 1),
+          roomWidth / Math.max(box.right - box.left, 1),
           roomHeight / Math.max(box.bottom - box.top, 1),
         ),
       ),
     );
 
-    this.x = width / 2 - ((box.left + box.right) / 2) * scale;
+    this.x = FIT_GUTTER + roomWidth / 2 - ((box.left + box.right) / 2) * scale;
     this.y = top + roomHeight / 2 - ((box.top + box.bottom) / 2) * scale;
     this.setScale(scale);
   }

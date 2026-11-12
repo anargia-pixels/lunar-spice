@@ -21,6 +21,8 @@ export type CanvasPalette = {
   fontFamily: string;
   /** Equal-width digits, for numbers that change under the pointer. */
   codeFontFamily: string;
+  /** Schematic text when the display options pick the mono font. */
+  schematicMonoFamily: string;
 };
 
 /** The one-pixel canvas that `toRgb` paints on, made on first use. */
@@ -87,6 +89,8 @@ function readCanvasPalette(): CanvasPalette {
     ),
     fontFamily: style.getPropertyValue("--font-ui").trim() || "sans-serif",
     codeFontFamily: style.getPropertyValue("--font-code").trim() || "monospace",
+    schematicMonoFamily:
+      style.getPropertyValue("--font-schematic-mono").trim() || "monospace",
   };
 }
 

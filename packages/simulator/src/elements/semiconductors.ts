@@ -983,6 +983,13 @@ const MOSFET_SPECS: readonly ParamSpec[] = [
   },
 ];
 
+/** A field-effect channel's current and its derivatives at one Vgs and Vds. */
+type ChannelPoint = {
+  current: number;
+  transconductance: number; // dI/dVgs
+  outputConductance: number; // dI/dVds
+};
+
 /** MOSFET parts; `polarity` is 1 for N-channel and -1 for P-channel. */
 const MOSFET_PRESETS: readonly Preset[] = [
   {
@@ -1039,12 +1046,12 @@ const MOSFET_PRESETS: readonly Preset[] = [
  * drain; source and drain swap roles when the drain sits below the source.
  */
 export class Mosfet extends CircuitElement {
-  readonly kind = "mosfet";
-  readonly dumpType = "f";
-  override readonly designatorPrefix = "M";
+  readonly kind: "mosfet" | "jfet" = "mosfet";
+  readonly dumpType: string = "f";
+  override readonly designatorPrefix: string = "M";
   override readonly mirrorFlag = 2;
   protected override readonly usesExtendedFormat = true;
-  readonly params = new ParamSet(MOSFET_SPECS, MOSFET_PRESETS);
+  readonly params: ParamSet = new ParamSet(MOSFET_SPECS, MOSFET_PRESETS);
   readonly gateSource = new CompanionCapacitor(0);
   readonly gateDrain = new CompanionCapacitor(0);
   /** Channel current into the drain. */
@@ -1084,7 +1091,7 @@ export class Mosfet extends CircuitElement {
     this.flags = value < 0 ? this.flags | 1 : this.flags & ~1;
   }
 
-  name() {
+  name(): string {
     return this.polarity === 1 ? "N-channel MOSFET" : "P-channel MOSFET";
   }
 
@@ -1097,7 +1104,7 @@ export class Mosfet extends CircuitElement {
     }
   }
 
-  override valueLabel() {
+  override valueLabel(): string {
     return this.params.isGeneric
       ? `Vt ${formatSi(this.params.get("vto") * this.polarity, "V")}`
       : this.params.modelName;
@@ -1122,7 +1129,7 @@ export class Mosfet extends CircuitElement {
   }
 
   /** Returns the index in `nodes` of the channel's drain end: past RD, if any. */
-  private channelDrain() {
+  protected channelDrain() {
     return this.params.get("rd") > 0 ? 3 : 2;
   }
 
@@ -1178,33 +1185,11 @@ export class Mosfet extends CircuitElement {
     const drain = isSwapped ? this.node(1) : this.node(drainIndex);
     const effectiveVgs = isSwapped ? vgs - vds : vgs;
     const effectiveVds = Math.abs(vds);
-    const beta = this.params.get("kp");
-    const lambda = this.params.get("lambda");
-    const overdrive = effectiveVgs - this.params.get("vto");
-    const modulation = 1 + lambda * effectiveVds;
-    let current = 0;
-    let transconductance = 0;
-    let outputConductance = 1e-8;
-
-    // Square-law current: linear region, then saturation; nothing below threshold.
-    if (overdrive > 0 && effectiveVds < overdrive) {
-      const base =
-        beta * (overdrive * effectiveVds - (effectiveVds * effectiveVds) / 2);
-
-      current = base * modulation;
-      transconductance = beta * effectiveVds * modulation;
-      outputConductance +=
-        beta * (overdrive - effectiveVds) * modulation + base * lambda;
-    } else if (overdrive > 0) {
-      const base = (beta / 2) * overdrive * overdrive;
-
-      current = base * modulation;
-      transconductance = beta * overdrive * modulation;
-      outputConductance += base * lambda;
-    }
-
+    const channel = this.channelCurrent(effectiveVgs, effectiveVds);
+    const transconductance = channel.transconductance;
     // Add 10 nS of leakage, so an off channel does not float.
-    current += 1e-8 * effectiveVds;
+    const current = channel.current + 1e-8 * effectiveVds;
+    const outputConductance = channel.outputConductance + 1e-8;
 
     // Linearize the current into the effective drain, in real polarity.
     const drainCurrent = sign * current;
@@ -1225,6 +1210,41 @@ export class Mosfet extends CircuitElement {
     this.gateSource.stampStep(system, this.node(0), this.node(1));
     this.gateDrain.stampStep(system, this.node(0), this.node(drainIndex));
     this.drainCurrent = isSwapped ? -drainCurrent : drainCurrent;
+  }
+
+  /**
+   * The square-law (level 1) channel current at `vgs` and `vds` (never negative), in
+   * N-channel terms, with its derivatives: linear region, then saturation; nothing below
+   * threshold.
+   */
+  protected channelCurrent(vgs: number, vds: number): ChannelPoint {
+    const beta = this.params.get("kp");
+    const lambda = this.params.get("lambda");
+    const overdrive = vgs - this.params.get("vto");
+    const modulation = 1 + lambda * vds;
+
+    if (overdrive <= 0) {
+      return { current: 0, transconductance: 0, outputConductance: 0 };
+    }
+
+    if (vds < overdrive) {
+      const base = beta * (overdrive * vds - (vds * vds) / 2);
+
+      return {
+        current: base * modulation,
+        transconductance: beta * vds * modulation,
+        outputConductance:
+          beta * (overdrive - vds) * modulation + base * lambda,
+      };
+    }
+
+    const base = (beta / 2) * overdrive * overdrive;
+
+    return {
+      current: base * modulation,
+      transconductance: beta * overdrive * modulation,
+      outputConductance: base * lambda,
+    };
   }
 
   override finishStep(system: MnaSystem) {
@@ -1316,8 +1336,9 @@ export class Mosfet extends CircuitElement {
       model.type === "pmos" || model.switches.has("pchan") ? -1 : 1;
   }
 
-  override editFields(): EditField[] {
-    const type: EditField = {
+  /** The N- or P-channel choice that heads the edit dialog. */
+  protected polarityField(): EditField {
+    return {
       kind: "choice",
       key: "polarity",
       label: "Type",
@@ -1330,7 +1351,9 @@ export class Mosfet extends CircuitElement {
         this.setPolarity(value === "p" ? -1 : 1);
       },
     };
+  }
 
+  override editFields(): EditField[] {
     const fields = this.params.fields(
       (text) =>
         applySpiceText(text, ["nmos", "pmos", "vdmos"], (model) =>
@@ -1342,13 +1365,342 @@ export class Mosfet extends CircuitElement {
       },
     );
 
-    return [type, ...fields];
+    return [this.polarityField(), ...fields];
   }
 
   override dumpValues() {
     return [
       this.params.get("vto"),
       this.params.get("kp"),
+      ...this.params.dump(),
+    ];
+  }
+}
+
+// JFETs
+
+const JFET_SPECS: readonly ParamSpec[] = [
+  {
+    key: "vto",
+    label: "Pinch-off voltage (VTO)",
+    unit: "V",
+    fallback: 4,
+    range: "positive",
+    spiceNames: ["vto"],
+    hint: "Its magnitude, as Vgs(off) on a datasheet; SPICE cards give it negative.",
+  },
+  {
+    key: "beta",
+    label: "Transconductance (BETA)",
+    unit: "A/V²",
+    fallback: 6.25e-4,
+    range: "positive",
+    spiceNames: ["beta"],
+    hint: "Idss = BETA × VTO². Id = BETA · (Vgs − VTO)² in saturation.",
+  },
+  {
+    key: "lambda",
+    label: "Channel-length modulation (LAMBDA)",
+    unit: "1/V",
+    fallback: 0,
+    range: "nonnegative",
+    spiceNames: ["lambda"],
+  },
+  {
+    key: "rd",
+    label: "Drain-source resistance (RD + RS)",
+    unit: "Ω",
+    fallback: 0,
+    range: "nonnegative",
+    spiceNames: ["rd"],
+  },
+  {
+    key: "is",
+    label: "Gate saturation current (IS)",
+    unit: "A",
+    fallback: 1e-14,
+    range: "positive",
+    spiceNames: ["is"],
+    hint: "Of each gate junction, which conducts when the gate is forward biased.",
+  },
+  {
+    key: "cgs",
+    label: "Gate-source capacitance (CGS)",
+    unit: "F",
+    fallback: 0,
+    range: "nonnegative",
+    spiceNames: ["cgs"],
+  },
+  {
+    key: "cgd",
+    label: "Gate-drain capacitance (CGD)",
+    unit: "F",
+    fallback: 0,
+    range: "nonnegative",
+    spiceNames: ["cgd"],
+  },
+];
+
+/**
+ * JFET parts; `polarity` is 1 for N-channel and -1 for P-channel. The generic parts are
+ * Falstad's default JFET: Idss 10 mA, pinching off at 4 V.
+ */
+const JFET_PRESETS: readonly Preset[] = [
+  {
+    name: "Generic N-channel",
+    polarity: 1,
+    isGeneric: true,
+    values: { vto: 4, beta: 6.25e-4 },
+  },
+  {
+    name: "Generic P-channel",
+    polarity: -1,
+    isGeneric: true,
+    values: { vto: 4, beta: 6.25e-4 },
+  },
+  {
+    name: "2N3819",
+    polarity: 1,
+    values: {
+      vto: 3,
+      beta: 1.304e-3,
+      lambda: 2.25e-3,
+      rd: 2,
+      is: 3.357e-14,
+      cgs: 2.414e-12,
+      cgd: 1.6e-12,
+    },
+  },
+  {
+    name: "2N5457",
+    polarity: 1,
+    values: {
+      vto: 1.372,
+      beta: 1.125e-3,
+      lambda: 2.3e-3,
+      rd: 2,
+      is: 1.813e-13,
+      cgs: 3e-12,
+      cgd: 1.5e-12,
+    },
+  },
+];
+
+/** Falstad's JFET square law has a factor ½ that SPICE's BETA leaves out. */
+const FALSTAD_BETA_SCALE = 2;
+
+/**
+ * A junction FET with the SPICE level 1 (Shichman-Hodges) model: a depletion channel
+ * that pinches off at VTO, channel-length modulation, drain-source resistance, gate
+ * junctions to source and drain, and constant gate capacitances. Posts and drawing
+ * follow the MOSFET's: gate, source, drain.
+ */
+export class Jfet extends Mosfet {
+  override readonly kind = "jfet";
+  override readonly dumpType = "j";
+  override readonly designatorPrefix = "J";
+  override readonly params = new ParamSet(JFET_SPECS, JFET_PRESETS);
+  /** Current through the gate-source and gate-drain junctions, gate to channel. */
+  gateSourceCurrent = 0;
+  gateDrainCurrent = 0;
+  private lastJunctionVgs = 0;
+  private lastJunctionVgd = 0;
+
+  static override read(
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    flags: number,
+    reader: TokenReader,
+  ) {
+    const jfet = new Jfet(x1, y1, x2, y2, flags);
+    const pinchOff = Math.abs(reader.number(-4));
+    const beta = reader.number(1.25e-3) / FALSTAD_BETA_SCALE;
+
+    if ((flags & EXTENDED_FORMAT_FLAG) !== 0) {
+      jfet.params.read(reader);
+    } else {
+      jfet.params.applyGeneric(jfet.polarity);
+      jfet.params.set("vto", pinchOff);
+      jfet.params.set("beta", beta);
+    }
+
+    return jfet;
+  }
+
+  override name() {
+    return this.polarity === 1 ? "N-channel JFET" : "P-channel JFET";
+  }
+
+  /** Idss, the drain current with the gate tied to the source, for generic parts. */
+  override valueLabel() {
+    const vto = this.params.get("vto");
+
+    return this.params.isGeneric
+      ? `Idss ${formatSi(this.params.get("beta") * vto * vto, "A")}`
+      : this.params.modelName;
+  }
+
+  /** Conducts from Vgs = −VTO on, so it is on with the gate at the source. */
+  protected override channelCurrent(vgs: number, vds: number): ChannelPoint {
+    const beta = this.params.get("beta");
+    const lambda = this.params.get("lambda");
+    const overdrive = vgs + this.params.get("vto");
+    const modulation = 1 + lambda * vds;
+
+    if (overdrive <= 0) {
+      return { current: 0, transconductance: 0, outputConductance: 0 };
+    }
+
+    if (vds < overdrive) {
+      const base = beta * vds * (2 * overdrive - vds);
+
+      return {
+        current: base * modulation,
+        transconductance: 2 * beta * vds * modulation,
+        outputConductance:
+          2 * beta * (overdrive - vds) * modulation + base * lambda,
+      };
+    }
+
+    const base = beta * overdrive * overdrive;
+
+    return {
+      current: base * modulation,
+      transconductance: 2 * beta * overdrive * modulation,
+      outputConductance: base * lambda,
+    };
+  }
+
+  /**
+   * Stamps one gate junction from the gate to `channel` at the measured `voltage` (gate
+   * minus channel); returns the voltage it linearized at and its current, gate to
+   * channel.
+   */
+  private stampJunction(
+    system: MnaSystem,
+    channel: number,
+    voltage: number,
+    previous: number,
+  ) {
+    const sign = this.polarity;
+    const saturation = this.params.get("is");
+    const critical = criticalVoltage(saturation, THERMAL_VOLTAGE);
+    // In the junction's forward direction: gate to channel for N-channel parts.
+    const measured = sign * voltage;
+
+    // Newton has not converged while the junction voltage moves more than 10 mV.
+    if (Math.abs(measured - previous) > 0.01) {
+      system.converged = false;
+    }
+
+    const limited = limitJunction(
+      measured,
+      previous,
+      critical,
+      THERMAL_VOLTAGE,
+    );
+
+    const exponential = limitedExp(limited / THERMAL_VOLTAGE);
+    const current = saturation * (exponential - 1) + JUNCTION_GMIN * limited;
+
+    const conductance =
+      (saturation * exponential) / THERMAL_VOLTAGE + JUNCTION_GMIN;
+
+    const gate = this.node(0);
+
+    system.stampConductance(gate, channel, conductance);
+    system.stampCurrentSource(
+      gate,
+      channel,
+      sign * (current - conductance * limited),
+    );
+
+    return { voltage: limited, current: sign * current };
+  }
+
+  override stampStep(system: MnaSystem) {
+    super.stampStep(system);
+
+    const vg = this.volts[0] ?? 0;
+    const drainIndex = this.channelDrain();
+
+    const source = this.stampJunction(
+      system,
+      this.node(1),
+      vg - (this.volts[1] ?? 0),
+      this.lastJunctionVgs,
+    );
+
+    const drain = this.stampJunction(
+      system,
+      this.node(drainIndex),
+      vg - (this.volts[drainIndex] ?? 0),
+      this.lastJunctionVgd,
+    );
+
+    this.lastJunctionVgs = source.voltage;
+    this.lastJunctionVgd = drain.voltage;
+    this.gateSourceCurrent = source.current;
+    this.gateDrainCurrent = drain.current;
+  }
+
+  override currentIntoPost(post: number) {
+    const junctions = [
+      this.gateSourceCurrent + this.gateDrainCurrent,
+      -this.gateSourceCurrent,
+      -this.gateDrainCurrent,
+    ];
+
+    return super.currentIntoPost(post) + (junctions[post] ?? 0);
+  }
+
+  override reset() {
+    super.reset();
+    this.gateSourceCurrent = 0;
+    this.gateDrainCurrent = 0;
+    this.lastJunctionVgs = 0;
+    this.lastJunctionVgd = 0;
+  }
+
+  override info() {
+    return [
+      ...super.info(),
+      `Ig = ${formatSi(this.gateSourceCurrent + this.gateDrainCurrent, "A")}`,
+    ];
+  }
+
+  /** Reads an NJF or PJF card; the pinch-off keeps its magnitude, polarity its sign. */
+  private applyJfetSpice(model: SpiceModel) {
+    const { params } = model;
+
+    this.params.applySpice(model);
+    this.params.set("rd", (params.get("rd") ?? 0) + (params.get("rs") ?? 0));
+    this.params.set("vto", Math.abs(this.params.get("vto")));
+    this.polarity = model.type === "pjf" ? -1 : 1;
+  }
+
+  override editFields(): EditField[] {
+    const fields = this.params.fields(
+      (text) =>
+        applySpiceText(text, ["njf", "pjf"], (model) =>
+          this.applyJfetSpice(model),
+        ),
+      (name) => {
+        this.polarity =
+          this.params.applyPreset(name)?.polarity ?? this.polarity;
+      },
+    );
+
+    return [this.polarityField(), ...fields];
+  }
+
+  /** Falstad's tokens: the pinch-off as a negative threshold, then its beta. */
+  override dumpValues() {
+    return [
+      -this.params.get("vto"),
+      this.params.get("beta") * FALSTAD_BETA_SCALE,
       ...this.params.dump(),
     ];
   }

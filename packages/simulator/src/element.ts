@@ -22,6 +22,7 @@ export type ElementKind =
   | "led"
   | "bjt"
   | "mosfet"
+  | "jfet"
   | "op-amp"
   | "schmitt-trigger"
   | "regulator"
@@ -102,6 +103,13 @@ export type EditField =
  */
 export const EXTENDED_FORMAT_FLAG = 1 << 16;
 
+/**
+ * Starts the tokens at the end of a line that place and name a part's label:
+ * `@label dx dy name`, the name left out when it is the automatic one. Only lines whose
+ * label was moved or renamed carry it, behind `EXTENDED_FORMAT_FLAG`.
+ */
+export const LABEL_MARKER = "@label";
+
 /** Reads the space-separated values after an element's position in a circuit file. */
 export class TokenReader {
   private readonly tokens: readonly string[];
@@ -175,8 +183,12 @@ export abstract class CircuitElement {
   volts: number[] = [];
   /** Current into the first post, through the element and out of the second. */
   current = 0;
-  /** Set by the circuit from the element's position in it, such as `R1`. */
+  /** Set by the circuit from the element's position in it, such as `R1`, or its custom name. */
   designator = "";
+  /** A name typed for it, such as `Rload`, that replaces the numbered designator. */
+  customName = "";
+  /** How far its label sits from where the drawing puts it, in schematic units. */
+  labelOffset: Point = { x: 0, y: 0 };
   /**
    * The flag bit that mirrors which side the element's extra posts sit on, for flips;
    * 0 for elements that have none.
@@ -409,6 +421,63 @@ export abstract class CircuitElement {
     return [];
   }
 
+  /** True when its label was moved or renamed, so its line carries `LABEL_MARKER`. */
+  private hasCustomLabel() {
+    return (
+      this.customName !== "" ||
+      this.labelOffset.x !== 0 ||
+      this.labelOffset.y !== 0
+    );
+  }
+
+  /** The tokens after `LABEL_MARKER` in its line, or none. */
+  private labelTokens(): (string | number)[] {
+    if (!this.hasCustomLabel()) {
+      return [];
+    }
+
+    return [
+      LABEL_MARKER,
+      this.labelOffset.x,
+      this.labelOffset.y,
+      ...(this.customName ? [escapeText(this.customName)] : []),
+    ];
+  }
+
+  /** Reads the tokens that followed `LABEL_MARKER` in its line. */
+  readLabel(tokens: readonly string[]) {
+    const [x = "0", y = "0", name] = tokens;
+
+    this.labelOffset = {
+      x: Number.isFinite(Number(x)) ? Number(x) : 0,
+      y: Number.isFinite(Number(y)) ? Number(y) : 0,
+    };
+    this.customName = name === undefined ? "" : unescapeText(name);
+  }
+
+  /**
+   * The fields the edit dialog shows: a name for parts with a designator, then
+   * `editFields`.
+   */
+  dialogFields(): EditField[] {
+    if (!this.designatorPrefix) {
+      return this.editFields();
+    }
+
+    const name: EditField = {
+      kind: "text",
+      key: "custom-name",
+      label: "Name",
+      value: this.customName,
+      hint: "Shown on the schematic and in results. Leave it empty to number it automatically.",
+      set: (value) => {
+        this.customName = value.trim();
+      },
+    };
+
+    return [name, ...this.editFields()];
+  }
+
   /**
    * Returns the element's line in a circuit file. It sets `EXTENDED_FORMAT_FLAG` only
    * when the line carries values Falstad does not write.
@@ -420,10 +489,11 @@ export abstract class CircuitElement {
       this.y1,
       this.x2,
       this.y2,
-      this.usesExtendedFormat
+      this.usesExtendedFormat || this.hasCustomLabel()
         ? this.flags | EXTENDED_FORMAT_FLAG
         : this.flags & ~EXTENDED_FORMAT_FLAG,
       ...this.dumpValues(),
+      ...this.labelTokens(),
     ].join(" ");
   }
 
@@ -440,6 +510,9 @@ export abstract class CircuitElement {
    * on the wrong side, as when a transistor is reflected, it flips its mirror flag.
    */
   transform(map: (point: Point) => Point) {
+    // The label's place depends on which way the part faces, so a turn or flip resets it.
+    this.labelOffset = { x: 0, y: 0 };
+
     const expected = this.posts().map(map);
     const start = map(this.start);
     const end = map(this.end);

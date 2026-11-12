@@ -15,7 +15,7 @@ in code, UI copy, docs or conversation, use the terms in [GLOSSARY.md](GLOSSARY.
   `editor.tsx`. Saved circuits live in IndexedDB (`lib/browser-circuits.ts`). Every page
   is listed in `pages` in `vite.config.ts` and prerendered at build time. `packages/infra`
   deploys it as the `lunar-spice` Worker on a release tag.
-- `packages/app`: the app both platforms run: shell, sidebar, simulation and results
+- `packages/app`: the app both platforms run: shell, menu bar, simulation and results
   panels, settings panes and the zustand stores. Analyses run in `lib/analysis-worker.ts`,
   off the UI thread. Each app supplies storage, file opening, its About rows and its
   Storage pane through `Platform` in `lib/platform.ts`. Saved circuits are named by
@@ -28,10 +28,10 @@ in code, UI copy, docs or conversation, use the terms in [GLOSSARY.md](GLOSSARY.
 - `packages/components`: shared UI. `src/components/ui/` is shadcn (Base UI);
   `circuit-editor/` is the canvas editor: `editor-controller.ts` owns the document,
   selection and gestures and composes `camera.ts`, `editor-history.ts`,
-  `interactive-run.ts` (the live simulation, scopes and sound) and `render-scene.ts`;
-  `plots/` and `analysis/` draw results. `src/lib/` holds what several of them share: the
-  canvas palette and trace colors, scopes, and keyboard shortcuts.
-  `src/styles/globals.css` is the theme.
+  `interactive-run.ts` (the live simulation, scopes and sound), `attached-wires.ts` (wires
+  that follow a moved selection) and `render-scene.ts`; `plots/` and `analysis/` draw
+  results. `src/lib/` holds what several of them share: the canvas palette and trace
+  colors, scopes, and keyboard shortcuts. `src/styles/globals.css` is the theme.
 - `packages/utils`: shared libs without DOM or React (`cn`, fonts).
 - `packages/infra`: the Alchemy stack (`alchemy.run.ts`) for the web app only: one
   `lunar-spice` Worker serving `apps/web` prerendered, on `lunarspice.doctorthe113.com`

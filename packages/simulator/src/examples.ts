@@ -1,7 +1,7 @@
 import type { AnalysisResult } from "./analyses";
 import { settingsForSpeed, settingsLine } from "./circuit";
 
-/** A ready-made circuit the sidebar offers, with the analysis it shows off best. */
+/** A ready-made circuit the File menu offers, with the analysis it shows off best. */
 type Example = {
   id: string;
   title: string;

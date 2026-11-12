@@ -11,7 +11,7 @@ import { createElement } from "react";
 
 import { toggleTheme } from "../components/theme-provider";
 import { activeBuffer, useCircuitStore } from "../stores/circuit-store";
-import { useSidebarStore } from "../stores/sidebar-store";
+import { useLayoutStore } from "../stores/layout-store";
 import { useSimulationStore } from "../stores/simulation-store";
 import { useZoomStore } from "../stores/zoom-store";
 import { openCircuitFile } from "./open-circuit-file";
@@ -45,7 +45,7 @@ export function runChosenAnalysis() {
   }
 }
 
-/** An app command with its keys. */
+/** An app command with its keys. Menus run it with `runAppCommand`. */
 type AppShortcut = {
   id: string;
   label: string;
@@ -83,18 +83,11 @@ const APP_SHORTCUTS = [
     run: () => void saveActiveCircuit(),
   },
   {
-    id: "toggle-sidebar",
-    label: "Toggle sidebar",
-    section: "App",
-    keys: [{ key: "b", mod: true, shift: true }],
-    run: () => useSidebarStore.getState().toggles.sidebar?.(),
-  },
-  {
     id: "toggle-panel",
     label: "Toggle simulation panel",
     section: "App",
     keys: [{ key: "b", mod: true, alt: true, shift: false }],
-    run: () => useSidebarStore.getState().toggles.panel?.(),
+    run: () => useLayoutStore.getState().togglePanel(),
   },
   {
     id: "toggle-theme",
@@ -116,7 +109,7 @@ const APP_SHORTCUTS = [
     label: "Show or hide results",
     section: "Simulation",
     keys: [{ key: "j", mod: true, shift: false }],
-    run: () => useSidebarStore.getState().toggleResults(),
+    run: () => useLayoutStore.getState().toggleResults(),
   },
   {
     id: "zoom-window-in",
@@ -195,6 +188,11 @@ export function appShortcutSections(): ShortcutSection[] {
   }
 
   return [...sections].map(([title, items]) => ({ title, items }));
+}
+
+/** Runs an app command as its keys do, for menus; it runs where its keys are absent too. */
+export function runAppCommand(id: AppShortcutId) {
+  APP_SHORTCUTS.find((shortcut) => shortcut.id === id)?.run();
 }
 
 /**

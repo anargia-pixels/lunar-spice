@@ -193,7 +193,7 @@ function ElementForm({
   const [errors, setErrors] = useState(new Map<string, string>());
   const switchId = useId();
 
-  const fields = draft.editFields();
+  const fields = draft.dialogFields();
 
   /** Re-reads every field from the copy after a change to many values. */
   const refresh = () => {

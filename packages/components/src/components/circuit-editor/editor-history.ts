@@ -47,6 +47,14 @@ export class EditorHistory {
     this.onChange = onChange;
   }
 
+  get canUndo() {
+    return this.undoStack.length > 0;
+  }
+
+  get canRedo() {
+    return this.redoStack.length > 0;
+  }
+
   /** Records the state before an edit; a new edit drops the redo steps. */
   record(before: Snapshot) {
     this.undoStack.push(before);
@@ -87,6 +95,6 @@ export class EditorHistory {
   }
 
   private report() {
-    this.onChange(this.undoStack.length > 0, this.redoStack.length > 0);
+    this.onChange(this.canUndo, this.canRedo);
   }
 }

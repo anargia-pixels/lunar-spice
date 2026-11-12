@@ -116,6 +116,8 @@
   --font-mono: initial;
   --font-ui: Poppins, ui-sans-serif, sans-serif, system-ui;
   --font-code: "Roboto Mono", ui-monospace, monospace;
+  /* The schematic canvas's mono choice; its sans choice is --font-ui. */
+  --font-schematic-mono: "JetBrains Mono", ui-monospace, monospace;
   --font-logo: "Pixelify Sans", ui-sans-serif, sans-serif, system-ui;
   --default-font-family: var(--font-ui);
   --default-mono-font-family: var(--font-code);

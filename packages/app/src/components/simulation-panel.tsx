@@ -1,12 +1,12 @@
 import {
-  SidebarBottomIcon,
+  Cancel01Icon,
   PlayIcon,
   RotateLeft01Icon,
+  SidebarBottomIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Hint } from "@lunar-spice/components/hint/hint";
 import { RunIcon } from "@lunar-spice/components/run-icon/run-icon";
-import { SidebarResizeRail } from "@lunar-spice/components/sidebar/sidebar-resize-rail";
 import { Alert, AlertDescription } from "@lunar-spice/components/ui/alert";
 import { Button } from "@lunar-spice/components/ui/button";
 import {
@@ -20,6 +20,7 @@ import {
   InputGroupInput,
   InputGroupText,
 } from "@lunar-spice/components/ui/input-group";
+import { ScrollArea } from "@lunar-spice/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -28,11 +29,6 @@ import {
   SelectValue,
 } from "@lunar-spice/components/ui/select";
 import { Separator } from "@lunar-spice/components/ui/separator";
-import {
-  Sidebar,
-  SidebarContent,
-  SidebarProvider,
-} from "@lunar-spice/components/ui/sidebar";
 import { Slider } from "@lunar-spice/components/ui/slider";
 import { Spinner } from "@lunar-spice/components/ui/spinner";
 import {
@@ -47,7 +43,15 @@ import {
   parseSi,
 } from "@lunar-spice/simulator/units";
 import { cn } from "@lunar-spice/utils/cn";
-import { type CSSProperties, type ReactNode, useId, useState } from "react";
+import {
+  type CSSProperties,
+  type KeyboardEvent,
+  type PointerEvent,
+  type ReactNode,
+  useId,
+  useRef,
+  useState,
+} from "react";
 
 import { ANALYSIS_LABELS, ANALYSIS_NOTES } from "../lib/analysis-request";
 import {
@@ -56,9 +60,8 @@ import {
   runChosenAnalysis,
 } from "../lib/app-commands";
 import { activeBuffer, useCircuitStore } from "../stores/circuit-store";
-import { useSidebarStore } from "../stores/sidebar-store";
+import { useLayoutStore } from "../stores/layout-store";
 import { useSimulationStore } from "../stores/simulation-store";
-import { RegisterPanelToggle } from "./register-panel-toggle";
 
 /**
  * The simulation speed slider's stops, in circuit seconds per second: 1-2-5 steps from
@@ -353,8 +356,8 @@ function AnalysisSection() {
   const isAnalyzing = useSimulationStore((state) => state.isAnalyzing);
   const analysisError = useSimulationStore((state) => state.analysisError);
 
-  const isResultsOpen = useSidebarStore((state) => state.resultsOpen);
-  const toggleResults = useSidebarStore((state) => state.toggleResults);
+  const isResultsOpen = useLayoutStore((state) => state.resultsOpen);
+  const toggleResults = useLayoutStore((state) => state.toggleResults);
 
   const { setAnalysis, setAcOptions, setTransientOptions, cancelAnalysis } =
     useSimulationStore.getState();
@@ -480,41 +483,113 @@ function AnalysisSection() {
   );
 }
 
-/** The right-hand panel: interactive simulation controls above the analysis settings. */
-export function SimulationPanel() {
-  const open = useSidebarStore((state) => state.panelOpen);
-  const setOpen = useSidebarStore((state) => state.setPanelOpen);
-  const width = useSidebarStore((state) => state.panelWidth);
-  const setWidth = useSidebarStore((state) => state.setPanelWidth);
+/** How far an arrow key moves the panel's edge, in CSS pixels. */
+const EDGE_KEY_STEP = 16;
 
-  const sidebarStyle: CSSProperties & Record<"--sidebar-width", string> = {
-    "--sidebar-width": `${width}px`,
+/**
+ * The panel's left edge, which resizes it on drag or with the arrow keys. The panel sits
+ * on the right, so it grows as the edge moves left. The store keeps the width in bounds.
+ */
+function ResizeEdge({
+  width,
+  onWidthChange,
+}: {
+  width: number;
+  onWidthChange: (width: number) => void;
+}) {
+  const drag = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    // Keeps the drag from selecting text in the panel or the page.
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drag.current = { startX: event.clientX, startWidth: width };
+  };
+
+  const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    if (drag.current) {
+      onWidthChange(
+        drag.current.startWidth - (event.clientX - drag.current.startX),
+      );
+    }
+  };
+
+  const endDrag = () => {
+    drag.current = null;
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const direction =
+      event.key === "ArrowLeft" ? 1 : event.key === "ArrowRight" ? -1 : 0;
+
+    if (direction !== 0) {
+      event.preventDefault();
+      onWidthChange(width + direction * EDGE_KEY_STEP);
+    }
   };
 
   return (
-    <SidebarProvider
-      open={open}
-      onOpenChange={setOpen}
-      keyboardShortcut={null}
-      style={sidebarStyle}
-      className="min-h-0 w-auto flex-none"
+    <Separator
+      orientation="vertical"
+      variant="handle"
+      aria-label="Resize simulation panel"
+      aria-valuenow={width}
+      tabIndex={0}
+      className="absolute inset-y-4 left-0.5 z-10"
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+      onKeyDown={handleKeyDown}
+    />
+  );
+}
+
+/**
+ * The simulation panel, floating over the canvas's right edge: interactive simulation
+ * controls above the analysis settings. The editor page shows it while it is open.
+ */
+export function SimulationPanel() {
+  const setOpen = useLayoutStore((state) => state.setPanelOpen);
+  const width = useLayoutStore((state) => state.panelWidth);
+  const setWidth = useLayoutStore((state) => state.setPanelWidth);
+
+  const widthStyle: CSSProperties & Record<"--panel-width", string> = {
+    "--panel-width": `${width}px`,
+  };
+
+  return (
+    <aside
+      aria-label="Simulation"
+      style={widthStyle}
+      className="bg-card shadow-floating pointer-events-auto relative flex h-full w-(--panel-width) flex-col overflow-hidden rounded-xl transition duration-150 ease-out motion-reduce:transition-none starting:translate-x-2 starting:opacity-0"
     >
-      <RegisterPanelToggle panel="panel" />
-      <Sidebar side="right">
-        <div className="flex h-10 shrink-0 items-center border-b px-4 text-xs font-medium">
-          Simulation
-        </div>
-        <SidebarContent>
-          <InteractiveSection />
-          <Separator />
-          <AnalysisSection />
-        </SidebarContent>
-        <SidebarResizeRail
-          width={width}
-          onWidthChange={setWidth}
-          side="right"
-        />
-      </Sidebar>
-    </SidebarProvider>
+      <ResizeEdge width={width} onWidthChange={setWidth} />
+      <header className="flex h-11 shrink-0 items-center justify-between gap-2 border-b pr-1.5 pl-4">
+        <h2 className="text-sm font-medium">Simulation</h2>
+        <Hint
+          label="Hide simulation panel"
+          shortcut={appShortcutKeys("toggle-panel")}
+        >
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Hide simulation panel"
+            onClick={() => setOpen(false)}
+          >
+            <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+          </Button>
+        </Hint>
+      </header>
+      <ScrollArea className="min-h-0 flex-1">
+        <InteractiveSection />
+        <Separator />
+        <AnalysisSection />
+      </ScrollArea>
+    </aside>
   );
 }

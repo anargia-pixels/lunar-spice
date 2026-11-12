@@ -30,6 +30,7 @@ import { isOnWire, joinPostsToWires } from "@lunar-spice/simulator/wiring";
 
 import { canvasPalette, watchPalette } from "../../lib/canvas-palette";
 import type { Scope, ScopeSettings } from "../../lib/scope";
+import { AttachedWires } from "./attached-wires";
 import { Camera, type Insets } from "./camera";
 import { commandForKey } from "./commands";
 import type { DisplayOptions } from "./display-options";
@@ -78,6 +79,9 @@ const PICK_DISTANCE = 8;
 /** Schematic units within which a click on a post starts a wire from it. */
 const POST_PICK_DISTANCE = 5;
 
+/** Schematic units around a label's text that still pick it. */
+const LABEL_PICK_MARGIN = 2;
+
 /** What a click on a post draws with the select tool, as in Multisim. */
 const WIRE_KIND: ElementKind = "wire";
 
@@ -94,17 +98,28 @@ const WHEEL_ZOOM_RATE = 0.0025;
 const FIRST_FRAME_MS = 16;
 
 /**
- * The gesture between a press and its release: panning, moving the selection, dragging
- * a wire's end, a rubber band, or holding a push switch.
+ * The gesture between a press and its release: panning, moving the selection with the
+ * wires attached to it, dragging a wire's end or a part's label, a rubber band, or
+ * holding a push switch.
  */
 type Drag =
   | { kind: "pan"; start: Point; scrolled: Point }
   | {
       kind: "move";
       before: Snapshot;
+      origin: Point;
       applied: Point;
+      wires: AttachedWires;
       hasMoved: boolean;
       clicked: CircuitElement;
+    }
+  | {
+      kind: "label";
+      before: Snapshot;
+      element: CircuitElement;
+      origin: Point;
+      startOffset: Point;
+      hasMoved: boolean;
     }
   | {
       kind: "end";
@@ -173,6 +188,8 @@ export class EditorController {
   private isPointerInside = false;
   private pointer: Point = { x: 0, y: 0 };
   private isSpaceHeld = false;
+  /** True while the pointer rests on a part's label, which a drag moves. */
+  private isOverLabel = false;
   private posts: PostPoint[] = [];
   /** Net voltages by net name from a DC analysis of this circuit, tagged on its nets. */
   private netVoltages: ReadonlyMap<string, number> | null = null;
@@ -210,6 +227,7 @@ export class EditorController {
     });
     this.painter = new SchematicPainter(context, this.drawOptions());
     this.attach();
+    this.loadSchematicFont();
     this.frame = requestAnimationFrame(this.tick);
   }
 
@@ -284,6 +302,24 @@ export class EditorController {
     this.canvas.height = Math.round(height * ratio);
     this.camera.resize(width, height);
     this.invalidate();
+  }
+
+  // State menus read when they open, so they need no callbacks of their own.
+
+  get canUndo() {
+    return this.history.canUndo;
+  }
+
+  get canRedo() {
+    return this.history.canRedo;
+  }
+
+  get selectionCount() {
+    return this.selection.size;
+  }
+
+  get toolId() {
+    return this.tool.id;
   }
 
   /** The canvas edges the floating controls cover, which fitted drawings stay clear of. */
@@ -363,6 +399,22 @@ export class EditorController {
   setDisplay(display: DisplayOptions) {
     this.display = display;
     this.updatePainter();
+    this.loadSchematicFont();
+  }
+
+  /**
+   * Fetches the mono schematic font when it is chosen, then redraws. Nothing else on the
+   * page uses it, so the browser would not load it for the canvas on its own.
+   */
+  private loadSchematicFont() {
+    if (this.display.schematicFont !== "mono" || !("fonts" in document)) {
+      return;
+    }
+
+    // Sample text covering each subset labels need, Greek for Ω included.
+    void document.fonts
+      .load(`11px ${canvasPalette().schematicMonoFamily}`, "R1 4.7 kΩ µF")
+      .then(() => this.invalidate());
   }
 
   /** Tags each net with its voltage in `result`; null removes the tags. */
@@ -539,7 +591,9 @@ export class EditorController {
           ? "grab"
           : this.tool.kind || this.wiring || this.hoveredPost
             ? "crosshair"
-            : "default";
+            : this.isOverLabel || this.drag?.kind === "label"
+              ? "move"
+              : "default";
   }
 
   /**
@@ -739,10 +793,42 @@ export class EditorController {
   /** Moves the selection by whole grid steps. */
   moveSelection(stepsX: number, stepsY: number) {
     this.editSelected((elements) => {
+      const wires = new AttachedWires(this.circuit.elements, this.selection);
+      const dx = stepsX * GRID_SIZE;
+      const dy = stepsY * GRID_SIZE;
+
       for (const element of elements) {
-        element.translate(stepsX * GRID_SIZE, stepsY * GRID_SIZE);
+        element.translate(dx, dy);
       }
+
+      this.moveAttachedWires(wires, dx, dy);
+      this.removeCollapsedWires(wires);
     });
+  }
+
+  /** Moves the wires attached to the selection, adding and removing their bends. */
+  private moveAttachedWires(wires: AttachedWires, dx: number, dy: number) {
+    const { added, removed } = wires.moveBy(dx, dy);
+
+    if (added.length > 0 || removed.length > 0) {
+      this.circuit.elements = [
+        ...this.circuit.elements.filter(
+          (element) => !removed.includes(element),
+        ),
+        ...added,
+      ];
+    }
+  }
+
+  /** Deletes wires a move shrank to a point, such as one dragged onto its other end. */
+  private removeCollapsedWires(wires: AttachedWires) {
+    const collapsed = wires.collapsed();
+
+    if (collapsed.length > 0) {
+      this.circuit.elements = this.circuit.elements.filter(
+        (element) => !collapsed.includes(element),
+      );
+    }
   }
 
   /** Turns the part being placed, or else the selection, a quarter turn. */
@@ -808,6 +894,10 @@ export class EditorController {
     }
   }
 
+  /**
+   * Reads the clipboard and pastes it, for menus and Ctrl+Alt+V. Firefox asks before a
+   * page reads the clipboard outside a paste event; Ctrl+V uses that event instead.
+   */
   pasteFromClipboard(isInPlace: boolean) {
     navigator.clipboard
       .readText()
@@ -817,9 +907,10 @@ export class EditorController {
 
   /**
    * Adds the elements in `text`. With `isInPlace` they keep their positions; otherwise
-   * their top-left corner lands on the pointer.
+   * their top-left corner lands on the pointer. Returns false when `text` holds no
+   * circuit lines, so other pasted text is left alone.
    */
-  private paste(text: string, isInPlace: boolean) {
+  paste(text: string, isInPlace: boolean) {
     const elements = text.split(/\r?\n/u).flatMap((line) => {
       const element = readElementLine(line);
 
@@ -829,7 +920,7 @@ export class EditorController {
     const corner = cornerOfElements(elements);
 
     if (!corner) {
-      return;
+      return false;
     }
 
     if (!isInPlace) {
@@ -842,6 +933,8 @@ export class EditorController {
     }
 
     this.add(elements);
+
+    return true;
   }
 
   /** Swaps an element for an edited copy, keeping its identity for scopes. */
@@ -932,6 +1025,29 @@ export class EditorController {
     return best;
   }
 
+  /** The element whose label is under `point`, topmost first; null when labels are hidden. */
+  private labelAt(point: Point) {
+    if (!this.display.showValues) {
+      return null;
+    }
+
+    for (const element of [...this.circuit.elements].reverse()) {
+      const box = this.painter.labelBoxes.get(element.id);
+
+      if (
+        box &&
+        point.x >= box.left - LABEL_PICK_MARGIN &&
+        point.x <= box.right + LABEL_PICK_MARGIN &&
+        point.y >= box.top - LABEL_PICK_MARGIN &&
+        point.y <= box.bottom + LABEL_PICK_MARGIN
+      ) {
+        return element;
+      }
+    }
+
+    return null;
+  }
+
   /** The selected wire's end under `point`, for dragging it; parts keep their size. */
   private endAt(point: Point) {
     const [element] = this.selection.size === 1 ? this.selection : [];
@@ -1014,6 +1130,24 @@ export class EditorController {
       };
     }
 
+    // A press on a part's label selects the part and drags the label.
+    const labelOwner = isShift ? null : this.labelAt(point);
+
+    if (labelOwner) {
+      if (!this.selection.has(labelOwner) || this.selection.size !== 1) {
+        this.select([labelOwner]);
+      }
+
+      return {
+        kind: "label",
+        before: snapshotOf(this.circuit.elements),
+        element: labelOwner,
+        origin: point,
+        startOffset: labelOwner.labelOffset,
+        hasMoved: false,
+      };
+    }
+
     // A press on a post starts a wire from it.
     const post = isShift ? null : this.postAt(point);
 
@@ -1063,7 +1197,9 @@ export class EditorController {
     return {
       kind: "move",
       before: snapshotOf(this.circuit.elements),
+      origin: snapped(point),
       applied: snapped(point),
+      wires: new AttachedWires(this.circuit.elements, this.selection),
       hasMoved: false,
       clicked: element,
     };
@@ -1089,7 +1225,16 @@ export class EditorController {
       const isSelecting = !this.tool.kind && !this.isSpaceHeld;
 
       this.moveGhost();
-      this.setHovered(this.tool.kind ? null : this.elementAt(point));
+      const labelOwner = this.tool.kind ? null : this.labelAt(point);
+
+      if (this.isOverLabel !== (labelOwner !== null)) {
+        this.isOverLabel = labelOwner !== null;
+        this.updateCursor();
+      }
+
+      this.setHovered(
+        this.tool.kind ? null : (labelOwner ?? this.elementAt(point)),
+      );
       this.setHoveredPost(
         isSelecting && !this.endAt(point) ? this.postAt(point) : null,
       );
@@ -1115,6 +1260,11 @@ export class EditorController {
             element.translate(dx, dy);
           }
 
+          this.moveAttachedWires(
+            drag.wires,
+            at.x - drag.origin.x,
+            at.y - drag.origin.y,
+          );
           drag.applied = at;
           drag.hasMoved = true;
           this.countPosts();
@@ -1135,6 +1285,15 @@ export class EditorController {
 
         drag.hasMoved = true;
         this.countPosts();
+        break;
+      }
+      case "label": {
+        // Labels move freely, by whole schematic units, not by grid steps.
+        drag.element.labelOffset = {
+          x: drag.startOffset.x + Math.round(point.x - drag.origin.x),
+          y: drag.startOffset.y + Math.round(point.y - drag.origin.y),
+        };
+        drag.hasMoved = true;
         break;
       }
       case "band":
@@ -1164,8 +1323,13 @@ export class EditorController {
         break;
       case "move":
       case "end":
+      case "label":
         // A drag commits the move; a click without a drag toggles a switch.
         if (drag.hasMoved) {
+          if (drag.kind === "move") {
+            this.removeCollapsedWires(drag.wires);
+          }
+
           this.history.record(drag.before);
           this.commit();
         } else if (

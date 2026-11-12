@@ -40,7 +40,15 @@ import { Toggle } from "@lunar-spice/components/ui/toggle";
 import type { OperatingPointResult } from "@lunar-spice/simulator/analyses";
 import type { CircuitElement } from "@lunar-spice/simulator/element";
 import { formatSi } from "@lunar-spice/simulator/units";
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  Fragment,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { ADD_TO_SCOPE_LABEL, type Scope } from "../../lib/scope";
 import { comboLabel, type ShortcutSection } from "../../lib/shortcuts";
@@ -233,6 +241,9 @@ function RunControls({
   );
 }
 
+/** The gap between the canvas edge and its floating bars, in CSS pixels. */
+const OVERLAY_GUTTER = 12;
+
 /** An icon button in a floating bar, named and hinted by its command. */
 function CommandButton({
   command,
@@ -268,6 +279,7 @@ function CommandButton({
  * buttons, a readout of the hovered part, its context menu and its dialogs. It opens
  * `text` whenever `circuitKey` changes and reports edits through `onChange`; the
  * controller it hands to `onControllerChange` lets the app drive the simulation.
+ * `aside` floats along the right edge; the bars and fitted drawings keep clear of it.
  */
 export function CircuitEditor({
   circuitKey,
@@ -276,6 +288,7 @@ export function CircuitEditor({
   status,
   operatingPoint,
   appShortcuts,
+  aside,
   onControllerChange,
   onChange,
   onStatus,
@@ -290,6 +303,7 @@ export function CircuitEditor({
   operatingPoint: OperatingPointResult | null;
   /** The app's own shortcuts, listed after the canvas's in the shortcuts dialog. */
   appShortcuts: readonly ShortcutSection[];
+  aside?: ReactNode;
   onControllerChange: (controller: EditorController | null) => void;
   onChange: (text: string) => void;
   onStatus: (status: SimulationStatus) => void;
@@ -299,6 +313,9 @@ export function CircuitEditor({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
   const bottomBarRef = useRef<HTMLDivElement>(null);
+  const asideRef = useRef<HTMLDivElement>(null);
+  /** Canvas width the aside covers from the right edge, with its gutter; 0 without one. */
+  const [asideInset, setAsideInset] = useState(0);
   const [controller, setController] = useState<EditorController | null>(null);
   const [toolId, setToolId] = useState<string>(SELECT_TOOL.id);
   const [selectionCount, setSelectionCount] = useState(0);
@@ -386,34 +403,46 @@ export function CircuitEditor({
     controller?.setOperatingPoint(operatingPoint);
   }, [controller, operatingPoint]);
 
-  // Fitted drawings stay clear of the run, tool and zoom bars, measured as they
-  // lay out.
+  // Fitted drawings stay clear of the run, tool and zoom bars and the aside,
+  // measured as they lay out.
   useEffect(() => {
     const container = containerRef.current;
     const topBar = topBarRef.current;
     const bottomBar = bottomBarRef.current;
+    const aside = asideRef.current;
 
-    if (!controller || !container || !topBar || !bottomBar) {
+    if (!controller || !container || !topBar || !bottomBar || !aside) {
       return;
     }
 
     const measure = () => {
       const box = container.getBoundingClientRect();
+      const { width } = aside.getBoundingClientRect();
+      const right = width > 0 ? width + OVERLAY_GUTTER : 0;
 
+      setAsideInset(right);
       controller.setInsets({
         top: topBar.getBoundingClientRect().bottom - box.top,
         bottom: box.bottom - bottomBar.getBoundingClientRect().top,
+        right,
       });
     };
 
     const observer = new ResizeObserver(measure);
 
-    for (const element of [container, topBar, bottomBar]) {
+    for (const element of [container, topBar, bottomBar, aside]) {
       observer.observe(element);
     }
 
     return () => observer.disconnect();
   }, [controller]);
+
+  // The bars and the empty-canvas note end where the aside begins.
+  const asideStyle: CSSProperties &
+    Record<"--aside-inset" | "--overlay-right", string> = {
+    "--aside-inset": `${asideInset}px`,
+    "--overlay-right": `${asideInset + OVERLAY_GUTTER}px`,
+  };
 
   // Runs canvas shortcuts from anywhere on the page but text fields and dialogs.
   useEffect(() => {
@@ -444,6 +473,12 @@ export function CircuitEditor({
         return;
       }
 
+      // Ctrl+V pastes through the browser's paste event below, which hands over the
+      // clipboard without asking; reading it from a key press makes Firefox prompt.
+      if (command === "paste") {
+        return;
+      }
+
       if (controller.handleKeyDown(event)) {
         event.preventDefault();
       }
@@ -451,12 +486,27 @@ export function CircuitEditor({
 
     const handleKeyUp = (event: KeyboardEvent) => controller.handleKeyUp(event);
 
+    // Pastes circuit lines at the pointer; text that holds none is left to the page.
+    const handlePaste = (event: ClipboardEvent) => {
+      if (event.defaultPrevented || isTypingTarget(event.target)) {
+        return;
+      }
+
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+
+      if (controller.paste(text, false)) {
+        event.preventDefault();
+      }
+    };
+
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("paste", handlePaste);
 
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("paste", handlePaste);
     };
   }, [controller]);
 
@@ -466,6 +516,7 @@ export function CircuitEditor({
     <>
       <div
         ref={containerRef}
+        style={asideStyle}
         className="relative min-h-0 flex-1 overflow-hidden"
       >
         {/* Canvas and its context menu */}
@@ -588,13 +639,13 @@ export function CircuitEditor({
         </ContextMenu>
         {/* How to start, while there is nothing on the canvas */}
         {isEmpty && (
-          <p className="text-muted-foreground pointer-events-none absolute inset-0 m-auto h-fit max-w-sm px-6 text-center text-sm text-balance">
+          <p className="text-muted-foreground pointer-events-none absolute inset-y-0 right-(--aside-inset) left-0 m-auto h-fit max-w-sm px-6 text-center text-sm text-balance">
             Pick a component from the toolbar and click to place it. Click a pin
-            to start a wire, or open an example from the sidebar.
+            to start a wire, or open an example from the File menu.
           </p>
         )}
         {/* Floating bars and errors over the top of the canvas */}
-        <div className="pointer-events-none absolute inset-x-3 top-3 flex flex-col items-center gap-2">
+        <div className="pointer-events-none absolute top-3 right-(--overlay-right) left-3 flex flex-col items-center gap-2">
           <div ref={topBarRef} className="flex w-full items-start gap-2">
             <div className="flex flex-1">
               <RunControls status={status} controller={controller} />
@@ -615,7 +666,7 @@ export function CircuitEditor({
           )}
         </div>
         {/* Floating bars along the bottom of the canvas */}
-        <div className="pointer-events-none absolute inset-x-3 bottom-3 flex items-end gap-2">
+        <div className="pointer-events-none absolute right-(--overlay-right) bottom-3 left-3 flex items-end gap-2">
           <div
             ref={bottomBarRef}
             className="bg-card rounded-group shadow-floating pointer-events-auto flex items-center p-1"
@@ -710,6 +761,13 @@ export function CircuitEditor({
               <HugeiconsIcon icon={HelpCircleIcon} strokeWidth={2} />
             </Button>
           </Hint>
+        </div>
+        {/* The aside, such as a settings panel, along the right edge */}
+        <div
+          ref={asideRef}
+          className="pointer-events-none absolute inset-y-3 right-3 flex"
+        >
+          {aside}
         </div>
       </div>
       {/* Dialogs */}

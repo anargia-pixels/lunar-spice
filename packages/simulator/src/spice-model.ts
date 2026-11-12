@@ -1,7 +1,7 @@
 /** A parsed SPICE `.model` card, such as a manufacturer's model from a datasheet. */
 export type SpiceModel = {
   name: string;
-  /** The device type in lowercase: `d`, `npn`, `pnp`, `nmos`, `pmos` or `vdmos`. */
+  /** The device type in lowercase: `d`, `npn`, `pnp`, `nmos`, `pmos`, `vdmos`, `njf` or `pjf`. */
   type: string;
   /** Parameters by lowercase name, values in base units. */
   params: Map<string, number>;

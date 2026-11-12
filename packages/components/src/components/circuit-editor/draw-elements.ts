@@ -23,6 +23,7 @@ import {
   Bjt,
   Diode,
   Led,
+  Jfet,
   Mosfet,
 } from "@lunar-spice/simulator/elements/semiconductors";
 import { VoltageSource } from "@lunar-spice/simulator/elements/sources";
@@ -31,6 +32,7 @@ import {
   interpolate,
   type Point,
 } from "@lunar-spice/simulator/geometry";
+import type { Bounds } from "@lunar-spice/simulator/layout";
 
 import { type CanvasPalette, mixRgb, rgbText } from "../../lib/canvas-palette";
 import { DOT_SPACING } from "./current-dots";
@@ -96,6 +98,7 @@ export class SchematicPainter {
     led: (element) => this.drawDiode(element),
     bjt: (element) => this.drawBjt(element),
     mosfet: (element) => this.drawMosfet(element),
+    jfet: (element) => this.drawJfet(element),
     "op-amp": (element) => this.drawOpAmp(element),
     "schmitt-trigger": (element) => this.drawSchmittTrigger(element),
     regulator: (element) => this.drawRegulator(element),
@@ -104,6 +107,11 @@ export class SchematicPainter {
   };
   /** The current along each path of the element being drawn. */
   private pathCurrents: readonly number[] = [];
+  /**
+   * Where each element's designator and value were last drawn, by element id, so a press
+   * on one can drag it. Elements without a label have none.
+   */
+  readonly labelBoxes = new Map<number, Bounds>();
 
   constructor(context: CanvasRenderingContext2D, options: DrawOptions) {
     this.context = context;
@@ -116,6 +124,13 @@ export class SchematicPainter {
 
   get palette() {
     return this.options.palette;
+  }
+
+  /** The font schematic text uses, as the display options pick it. */
+  get fontFamily() {
+    return this.options.schematicFont === "mono"
+      ? this.palette.schematicMonoFamily
+      : this.palette.fontFamily;
   }
 
   // Colors and primitives
@@ -232,10 +247,59 @@ export class SchematicPainter {
     const { context } = this;
 
     context.fillStyle = this.look.accent ?? rgbText(this.palette.foreground);
-    context.font = `${size}px ${this.palette.fontFamily}`;
+    context.font = `${size}px ${this.fontFamily}`;
     context.textAlign = align;
     context.textBaseline = "middle";
     context.fillText(content, at.x, at.y);
+  }
+
+  /**
+   * Writes one line of `element`'s label at `at`, moved by its label offset, and adds
+   * where it landed to the element's label box.
+   */
+  private partLabel(
+    element: CircuitElement,
+    content: string,
+    at: Point,
+    align: CanvasTextAlign = "center",
+    size = LABEL_SIZE,
+  ) {
+    const placed = {
+      x: at.x + element.labelOffset.x,
+      y: at.y + element.labelOffset.y,
+    };
+
+    this.text(content, placed, align, size);
+
+    const width = this.context.measureText(content).width;
+
+    const left =
+      align === "left"
+        ? placed.x
+        : align === "right"
+          ? placed.x - width
+          : placed.x - width / 2;
+
+    const box = {
+      left,
+      right: left + width,
+      top: placed.y - size / 2 - 1,
+      bottom: placed.y + size / 2 + 1,
+    };
+
+    const previous = this.labelBoxes.get(element.id);
+
+    this.labelBoxes.set(
+      element.id,
+      previous
+        ? {
+            left: Math.min(previous.left, box.left),
+            right: Math.max(previous.right, box.right),
+            top: Math.min(previous.top, box.top),
+            bottom: Math.max(previous.bottom, box.bottom),
+          }
+        : box,
+    );
   }
 
   /**
@@ -260,13 +324,17 @@ export class SchematicPainter {
       Math.abs(element.end.y - element.start.y);
 
     if (isHorizontal) {
-      this.text(lines.join("  "), { x: middle.x, y: middle.y - reach - 6 });
+      this.partLabel(element, lines.join("  "), {
+        x: middle.x,
+        y: middle.y - reach - 6,
+      });
 
       return;
     }
 
     lines.forEach((content, index) =>
-      this.text(
+      this.partLabel(
+        element,
         content,
         {
           x: middle.x + reach + 4,
@@ -293,6 +361,7 @@ export class SchematicPainter {
   /** Draws one element in `look`, with the drawer for its kind. */
   draw(element: CircuitElement, look: ElementLook) {
     this.look = look;
+    this.labelBoxes.delete(element.id);
     this.pathCurrents = element.currentPaths();
 
     const { context } = this;
@@ -340,7 +409,7 @@ export class SchematicPainter {
     const { context } = this;
 
     this.line(element.start, element.end, this.voltageColor(voltage));
-    context.font = `600 ${LABEL_SIZE}px ${this.palette.fontFamily}`;
+    context.font = `600 ${LABEL_SIZE}px ${this.fontFamily}`;
 
     const width = context.measureText(text).width + 10;
     const isLeft = element.end.x < element.start.x;
@@ -990,6 +1059,54 @@ export class SchematicPainter {
     this.sideLabel(element, end, 22);
   }
 
+  private drawJfet(element: CircuitElement) {
+    if (!(element instanceof Jfet)) {
+      return;
+    }
+
+    const [gate, source, drain] = element.posts();
+    const [vg = 0, vs = 0, vd = 0] = element.volts;
+
+    if (!gate || !source || !drain) {
+      return;
+    }
+
+    const { start, end } = element;
+    const length = distance(start, end) || 1;
+    const channel = interpolate(start, end, 1 - 10 / length);
+    const arrowBack = interpolate(start, end, 1 - 18 / length);
+    // Unit steps from the axis toward the drain and source sides.
+    const toDrain = { x: (drain.x - end.x) / 16, y: (drain.y - end.y) / 16 };
+    const toSource = { x: (source.x - end.x) / 16, y: (source.y - end.y) / 16 };
+
+    const offsetBy = (point: Point, step: Point, amount: number) => ({
+      x: point.x + step.x * amount,
+      y: point.y + step.y * amount,
+    });
+
+    const drainChannel = offsetBy(channel, toDrain, 16);
+    const sourceChannel = offsetBy(channel, toSource, 16);
+
+    // The gate runs into a solid channel, which is never cut off by a gap as a MOSFET's.
+    this.line(start, channel, this.voltageColor(vg));
+    this.line(
+      offsetBy(channel, toDrain, 20),
+      offsetBy(channel, toSource, 20),
+      this.voltageColor((vs + vd) / 2),
+    );
+    this.line(drainChannel, drain, this.voltageColor(vd));
+    this.line(sourceChannel, source, this.voltageColor(vs));
+
+    // The gate arrow points into an N-channel device and out of a P-channel one.
+    const tip = element.polarity === 1 ? channel : arrowBack;
+    const tail = element.polarity === 1 ? arrowBack : channel;
+
+    this.line(tip, interpolate(tip, tail, 0.75, 3), this.voltageColor(vg));
+    this.line(tip, interpolate(tip, tail, 0.75, -3), this.voltageColor(vg));
+    this.dots([drain, drainChannel, sourceChannel, source], 2);
+    this.sideLabel(element, end, 26);
+  }
+
   private drawOpAmp(element: CircuitElement) {
     if (!(element instanceof OpAmp)) {
       return;
@@ -1205,7 +1322,8 @@ export class SchematicPainter {
     // Labels sit inside the body under its name, clear of every pin and wire.
     if (this.options.showValues) {
       labelLines(element).forEach((content, line) =>
-        this.text(
+        this.partLabel(
+          element,
           content,
           { x: x + TIMER_SIZE.width / 2, y: y + 56 + line * 11 },
           "center",
@@ -1221,7 +1339,10 @@ export class SchematicPainter {
       return;
     }
 
-    this.text(labelLines(element).join("  "), { x: at.x, y: at.y - reach - 4 });
+    this.partLabel(element, labelLines(element).join("  "), {
+      x: at.x,
+      y: at.y - reach - 4,
+    });
   }
 
   // Overlays

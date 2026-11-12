@@ -12,7 +12,7 @@ import { TabItem, Tabs, TabsList } from "@lunar-spice/components/ui/tabs";
 
 import { ANALYSIS_LABELS } from "../lib/analysis-request";
 import { useCircuitStore } from "../stores/circuit-store";
-import { useSidebarStore } from "../stores/sidebar-store";
+import { useLayoutStore } from "../stores/layout-store";
 import {
   type ResultsTab,
   useSimulationStore,
@@ -66,7 +66,7 @@ function AnalysisContent() {
  * the editor page sizes and only shows while results are open.
  */
 export function ResultsPanel() {
-  const setOpen = useSidebarStore((state) => state.setResultsOpen);
+  const setOpen = useLayoutStore((state) => state.setResultsOpen);
   const tab = useSimulationStore((state) => state.resultsTab);
   const setTab = useSimulationStore((state) => state.setResultsTab);
   const scopes = useSimulationStore((state) => state.scopes);

@@ -1,4 +1,9 @@
-import { type CircuitElement, type ElementKind, TokenReader } from "./element";
+import {
+  type CircuitElement,
+  type ElementKind,
+  LABEL_MARKER,
+  TokenReader,
+} from "./element";
 import { Microphone, Speaker } from "./elements/audio";
 import {
   Ground,
@@ -25,7 +30,7 @@ import {
   InvertingSchmittTrigger,
   SchmittTrigger,
 } from "./elements/schmitt-trigger";
-import { Bjt, Diode, Led, Mosfet } from "./elements/semiconductors";
+import { Bjt, Diode, Jfet, Led, Mosfet } from "./elements/semiconductors";
 import { CurrentSource, Rail, VoltageSource } from "./elements/sources";
 
 /** Simulation settings saved in a circuit file's `$` line, as Falstad writes them. */
@@ -121,6 +126,7 @@ const ELEMENT_CLASSES: Record<ElementKind, ElementClass> = {
   led: Led,
   bjt: Bjt,
   mosfet: Mosfet,
+  jfet: Jfet,
   "op-amp": OpAmp,
   "schmitt-trigger": SchmittTrigger,
   regulator: FixedRegulator,
@@ -185,14 +191,24 @@ export function readElementLine(line: string) {
     return null;
   }
 
-  return elementClass.read(
+  // The label tail comes last, after the values the element's class reads.
+  const values = tokens.slice(6);
+  const marker = values.lastIndexOf(LABEL_MARKER);
+
+  const element = elementClass.read(
     x1,
     y1,
     x2,
     y2,
     flags,
-    new TokenReader(tokens.slice(6)),
+    new TokenReader(marker === -1 ? values : values.slice(0, marker)),
   );
+
+  if (marker !== -1) {
+    element.readLabel(values.slice(marker + 1));
+  }
+
+  return element;
 }
 
 /** Copies `element` through its file line; the copy gets a new id. Throws when it fails. */
@@ -260,8 +276,10 @@ export function assignDesignators(elements: readonly CircuitElement[]) {
 
     const count = (counts.get(element.designatorPrefix) ?? 0) + 1;
 
+    // Named parts keep their number, so naming one does not renumber the rest.
     counts.set(element.designatorPrefix, count);
-    element.designator = `${element.designatorPrefix}${count}`;
+    element.designator =
+      element.customName || `${element.designatorPrefix}${count}`;
   }
 }
 

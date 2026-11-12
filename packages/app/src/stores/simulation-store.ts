@@ -17,7 +17,7 @@ import type {
   AnalysisRequest,
   AnalysisResponse,
 } from "../lib/analysis-request";
-import { useSidebarStore } from "./sidebar-store";
+import { useLayoutStore } from "./layout-store";
 
 /** Which tab the results panel shows. */
 export type ResultsTab = "scopes" | "analysis";
@@ -99,7 +99,7 @@ export const useSimulationStore = create<SimulationStore>()(
         }));
 
         if (isAdded) {
-          useSidebarStore.getState().setResultsOpen(true);
+          useLayoutStore.getState().setResultsOpen(true);
         }
       },
       setResultsTab: (resultsTab) => set({ resultsTab }),
@@ -123,7 +123,7 @@ export const useSimulationStore = create<SimulationStore>()(
 
         worker = current;
         set({ isAnalyzing: true, analysisError: null, resultsTab: "analysis" });
-        useSidebarStore.getState().setResultsOpen(true);
+        useLayoutStore.getState().setResultsOpen(true);
         current.addEventListener(
           "message",
           (event: MessageEvent<AnalysisResponse>) => {

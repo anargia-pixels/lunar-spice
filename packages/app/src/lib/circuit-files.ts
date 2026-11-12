@@ -30,7 +30,7 @@ export function openedCircuit(fileName: string, text: string): OpenedCircuit {
   return { title: titleOf(fileName), text };
 }
 
-/** Sorts saved circuits in place, newest first, as the sidebar lists them. */
+/** Sorts saved circuits in place, newest first, as the File menu lists them. */
 export function newestFirst(circuits: SavedCircuit[]) {
   return circuits.sort((a, b) => b.modifiedMs - a.modifiedMs);
 }

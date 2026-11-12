@@ -31,7 +31,7 @@ export type CircuitStorage = {
 
 /** What the app needs from the desktop app or the browser it runs in. */
 export type Platform = CircuitStorage & {
-  version: string; // Shown in the sidebar header.
+  version: string; // Shown by the logo in the menu bar.
   openCircuitFile: () => Promise<OpenedCircuit | null>; // Null when cancelled.
   /**
    * Calls `listener` with each file the OS asks the app to open, such as a

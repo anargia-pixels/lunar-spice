@@ -28,52 +28,68 @@ const SECTIONS = [
   { id: "about", label: "About", icon: InformationCircleIcon },
 ] as const;
 
-type SettingsSection = (typeof SECTIONS)[number]["id"];
+export type SettingsSection = (typeof SECTIONS)[number]["id"];
+
+/** The section list and the open section's pane; it starts at `initialSection`. */
+function SettingsBody({
+  panes,
+  initialSection,
+}: {
+  panes: Record<SettingsSection, ReactNode>;
+  initialSection: SettingsSection;
+}) {
+  const [section, setSection] = useState(initialSection);
+
+  return (
+    <SidebarProvider keyboardShortcut={null} className="h-full min-h-0">
+      <Sidebar collapsible="none">
+        <SidebarContent>
+          <SidebarGroup>
+            <SidebarGroupLabel>General</SidebarGroupLabel>
+            <SidebarMenu>
+              {SECTIONS.map(({ id, label, icon }) => (
+                <SidebarMenuItem key={id}>
+                  <SidebarMenuButton
+                    isActive={section === id}
+                    onClick={() => setSection(id)}
+                  >
+                    <HugeiconsIcon icon={icon} strokeWidth={2} />
+                    <span>{label}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroup>
+        </SidebarContent>
+      </Sidebar>
+      <div className="bg-background min-w-0 flex-1">{panes[section]}</div>
+    </SidebarProvider>
+  );
+}
 
 /**
  * Settings window filling 80% of the Lunar Spice window: a sidebar of sections beside
- * the open one's pane. `children` is the trigger that opens it.
+ * the open one's pane. Each opening starts at `initialSection`.
  */
 export function SettingsDialog({
   panes,
-  children,
+  open,
+  onOpenChange,
+  initialSection = "appearances",
 }: {
   panes: Record<SettingsSection, ReactNode>;
-  children: ReactNode;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  initialSection?: SettingsSection;
 }) {
-  const [section, setSection] = useState<SettingsSection>("appearances");
-
   return (
-    <Dialog>
-      {children}
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className="h-4/5 w-4/5 max-w-none sm:max-w-none"
         padded={false}
       >
         <DialogTitle className="sr-only">Settings</DialogTitle>
-        <SidebarProvider keyboardShortcut={null} className="h-full min-h-0">
-          <Sidebar collapsible="none">
-            <SidebarContent>
-              <SidebarGroup>
-                <SidebarGroupLabel>General</SidebarGroupLabel>
-                <SidebarMenu>
-                  {SECTIONS.map(({ id, label, icon }) => (
-                    <SidebarMenuItem key={id}>
-                      <SidebarMenuButton
-                        isActive={section === id}
-                        onClick={() => setSection(id)}
-                      >
-                        <HugeiconsIcon icon={icon} strokeWidth={2} />
-                        <span>{label}</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  ))}
-                </SidebarMenu>
-              </SidebarGroup>
-            </SidebarContent>
-          </Sidebar>
-          <div className="bg-background min-w-0 flex-1">{panes[section]}</div>
-        </SidebarProvider>
+        <SettingsBody panes={panes} initialSection={initialSection} />
       </DialogContent>
     </Dialog>
   );
