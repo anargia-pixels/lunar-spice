@@ -1,14 +1,7 @@
 import type { CircuitElement } from "@lunar-spice/simulator/element";
 import { Microphone, Speaker } from "@lunar-spice/simulator/elements/audio";
 
-/** Live input held back so the bursty simulation never runs it dry, in seconds. */
-const INPUT_LATENCY = 0.06;
-
-/** Input buffered past which reading jumps forward to catch up, in seconds. */
-const MAX_INPUT_LAG = 0.3;
-
-/** Samples of live input kept: over a second at 48 kHz. */
-const INPUT_CAPACITY = 1 << 16;
+import { LiveInput } from "./live-input";
 
 /** Frames per capture callback. */
 const CAPTURE_FRAMES = 1024;
@@ -30,7 +23,7 @@ const LATE_START = 0.005;
  * microphones, and its speakers play through the output. Simulated time maps to audio
  * time one to one, so sound only runs while the simulation runs in real time.
  *
- * Input fills a ring buffer that the simulation reads at its own pace, a little behind
+ * Input fills a `LiveInput` that the simulation reads at its own pace, a little behind
  * the newest sample. Output is averaged down to the device's sample rate, stripped of
  * DC, and scheduled in one buffer per frame.
  */
@@ -44,10 +37,7 @@ export class AudioIo {
   private stream: MediaStream | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
   private processor: ScriptProcessorNode | null = null;
-  private readonly ring = new Float32Array(INPUT_CAPACITY);
-  private written = 0;
-  private readPosition = 0;
-  private lastInputTime: number | null = null;
+  private readonly input = new LiveInput();
   private pending: number[] = [];
   private nextStart = 0;
   private accumulated = 0;
@@ -172,7 +162,7 @@ export class AudioIo {
   }
 
   /**
-   * Opens the microphone and feeds its samples into the ring buffer. Drops the stream
+   * Opens the microphone and feeds its samples into the live input. Drops the stream
    * when a newer request or a new context replaced this one while it waited.
    */
   private async startInput(context: AudioContext) {
@@ -203,7 +193,7 @@ export class AudioIo {
       const source = context.createMediaStreamSource(stream);
 
       processor.addEventListener("audioprocess", (event) =>
-        this.capture(event.inputBuffer.getChannelData(0)),
+        this.input.write(event.inputBuffer.getChannelData(0)),
       );
       source.connect(processor);
       // The processor runs only while connected; its output stays silent.
@@ -235,55 +225,16 @@ export class AudioIo {
     this.processor = null;
     this.source = null;
     this.stream = null;
-    this.written = 0;
-    this.readPosition = 0;
-    this.lastInputTime = null;
+    this.input.clear();
   }
 
-  private capture(samples: Float32Array) {
-    for (const sample of samples) {
-      this.ring[this.written % INPUT_CAPACITY] = sample;
-      this.written += 1;
-    }
-  }
-
-  /**
-   * The live input at simulated `time`, from −1 to 1; 0 while there is none. Reading
-   * advances with simulated time. It jumps to just behind the newest sample when it
-   * starts, when time goes back, when it falls too far behind, and when it runs dry.
-   */
+  /** The live input at simulated `time`, from −1 to 1; 0 while there is none. */
   private inputAt(time: number) {
     const { context } = this;
 
-    if (!this.stream || !context || this.written === 0) {
-      return 0;
-    }
-
-    const rate = context.sampleRate;
-    const resync = Math.max(0, this.written - INPUT_LATENCY * rate);
-
-    if (
-      this.lastInputTime === null ||
-      time < this.lastInputTime ||
-      this.written - this.readPosition > MAX_INPUT_LAG * rate
-    ) {
-      this.readPosition = resync;
-    } else {
-      this.readPosition += (time - this.lastInputTime) * rate;
-    }
-
-    if (this.readPosition > this.written - 1) {
-      this.readPosition = resync;
-    }
-
-    this.lastInputTime = time;
-
-    const index = Math.floor(this.readPosition);
-    const next = Math.min(index + 1, this.written - 1);
-    const a = this.ring[index % INPUT_CAPACITY] ?? 0;
-    const b = this.ring[next % INPUT_CAPACITY] ?? 0;
-
-    return a + (b - a) * (this.readPosition - index);
+    return this.stream && context
+      ? this.input.read(time, context.sampleRate)
+      : 0;
   }
 
   /** Adds one simulation step of output, `level` from −1 to 1, lasting `timeStep`. */

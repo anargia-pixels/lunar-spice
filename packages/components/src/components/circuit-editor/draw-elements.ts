@@ -63,6 +63,57 @@ const LABEL_SIZE = 11;
 /** Radius of the bubble at an inverting Schmitt trigger's output. */
 const SCHMITT_BUBBLE_RADIUS = 3;
 
+/**
+ * A transistor's collector or drain and emitter or source posts sit this far either side
+ * of its end. Their legs run straight out to them from close to the axis, so the body
+ * stays compact and the legs read clearly, as in the textbook symbols.
+ */
+const POST_SPAN = 16;
+
+/** How far back from the end along the axis a BJT's base bar sits. */
+const BJT_BAR = 7;
+
+/** How far back from the end along the axis a FET's channel sits. */
+const FET_CHANNEL = 8;
+
+/** How far back a MOSFET's gate plate sits, clear of its channel. */
+const MOSFET_GATE = 12;
+
+/** How far off the axis a BJT's collector and emitter lines leave its bar. */
+const BJT_LINE_START = 2;
+
+/** How far off the axis a BJT's legs begin, running straight out to their posts. */
+const BJT_LEG_START = 7;
+
+/** How far off the axis a FET's legs begin, past the stubs from its channel. */
+const FET_LEG_START = 6;
+
+/** A filled arrowhead's length from point to back, in schematic units. */
+const ARROW_LENGTH = 5;
+
+const ARROW_HALF_WIDTH = 2.5;
+
+/**
+ * Places points on a three-post transistor: `along` its axis from the end (negative back
+ * toward the first post), then `out` toward the collector or drain post, or away from it
+ * toward the emitter or source when negative.
+ */
+function transistorFrame(element: CircuitElement, outPost: Point) {
+  const { start, end } = element;
+  const length = distance(start, end) || 1;
+  const axis = { x: (end.x - start.x) / length, y: (end.y - start.y) / length };
+
+  const side = {
+    x: (outPost.x - end.x) / POST_SPAN,
+    y: (outPost.y - end.y) / POST_SPAN,
+  };
+
+  return (along: number, out = 0): Point => ({
+    x: end.x + axis.x * along + side.x * out,
+    y: end.y + axis.y * along + side.y * out,
+  });
+}
+
 /** An element's designator and value, whichever it has, for labels beside it. */
 function labelLines(element: CircuitElement) {
   return [element.designator, element.valueLabel()].filter(Boolean);
@@ -947,57 +998,39 @@ export class SchematicPainter {
       return;
     }
 
-    const { start, end } = element;
-    const length = distance(start, end) || 1;
-    const barCenter = interpolate(start, end, 1 - 16 / length);
-    const collectorSide = interpolate(barCenter, collector, 0.5);
-    const emitterSide = interpolate(barCenter, emitter, 0.5);
-    const barA = interpolate(barCenter, collectorSide, 1);
-    const barB = interpolate(barCenter, emitterSide, 1);
+    const at = transistorFrame(element, collector);
+    const barCenter = at(-BJT_BAR);
+    const collectorBar = at(-BJT_BAR, BJT_LINE_START);
+    const emitterBar = at(-BJT_BAR, -BJT_LINE_START);
+    const collectorBend = at(0, BJT_LEG_START);
+    const emitterBend = at(0, -BJT_LEG_START);
 
-    this.context.strokeStyle = this.outlineColor();
-    this.context.beginPath();
-    this.context.arc(
-      interpolate(start, end, 1 - 8 / length).x,
-      interpolate(start, end, 1 - 8 / length).y,
-      20,
-      0,
-      2 * Math.PI,
-    );
-    this.context.stroke();
-    this.line(start, barCenter, this.voltageColor(vb));
-    this.line(barA, barB, this.voltageColor(vb));
-    this.line(
-      interpolate(barCenter, barA, 0.5),
-      collector,
-      this.voltageColor(vc),
-    );
-    this.line(
-      interpolate(barCenter, barB, 0.5),
-      emitter,
-      this.voltageColor(ve),
-    );
+    this.line(base, barCenter, this.voltageColor(vb));
+    this.line(at(-BJT_BAR, 6), at(-BJT_BAR, -6), this.voltageColor(vb));
+    this.line(collectorBar, collectorBend, this.voltageColor(vc));
+    this.line(collectorBend, collector, this.voltageColor(vc));
+    this.line(emitterBar, emitterBend, this.voltageColor(ve));
+    this.line(emitterBend, emitter, this.voltageColor(ve));
 
     // The emitter arrow points out of an NPN and into a PNP.
-    const arrowFrom = interpolate(barCenter, barB, 0.5);
+    if (element.polarity === 1) {
+      this.arrowHead(
+        interpolate(emitterBar, emitterBend, 0.9),
+        emitterBar,
+        this.voltageColor(ve),
+      );
+    } else {
+      this.arrowHead(
+        interpolate(emitterBar, emitterBend, 0.25),
+        emitterBend,
+        this.voltageColor(ve),
+      );
+    }
 
-    const tip =
-      element.polarity === 1
-        ? interpolate(arrowFrom, emitter, 0.8)
-        : interpolate(arrowFrom, emitter, 0.25);
-
-    const back =
-      element.polarity === 1
-        ? interpolate(arrowFrom, emitter, 0.45)
-        : interpolate(arrowFrom, emitter, 0.6);
-
-    this.line(tip, interpolate(back, tip, 0, 5), this.voltageColor(ve));
-    this.line(tip, interpolate(back, tip, 0, -5), this.voltageColor(ve));
-
-    this.dots([start, barCenter], 0);
-    this.dots([collector, interpolate(barCenter, barA, 0.5)], 1);
-    this.dots([emitter, interpolate(barCenter, barB, 0.5)], 2);
-    this.sideLabel(element, end, 26);
+    this.dots([base, barCenter], 0);
+    this.dots([collector, collectorBend, collectorBar], 1);
+    this.dots([emitter, emitterBend, emitterBar], 2);
+    this.transistorLabel(element, 6);
   }
 
   private drawMosfet(element: CircuitElement) {
@@ -1012,51 +1045,46 @@ export class SchematicPainter {
       return;
     }
 
-    const { start, end } = element;
-    const length = distance(start, end) || 1;
-    const plate = interpolate(start, end, 1 - 16 / length);
-    const channel = interpolate(start, end, 1 - 10 / length);
-    // Unit steps from the axis toward the drain and source sides.
-    const toDrain = { x: (drain.x - end.x) / 16, y: (drain.y - end.y) / 16 };
-    const toSource = { x: (source.x - end.x) / 16, y: (source.y - end.y) / 16 };
+    const at = transistorFrame(element, drain);
+    const drainStub = at(-FET_CHANNEL, FET_LEG_START);
+    const sourceStub = at(-FET_CHANNEL, -FET_LEG_START);
+    const drainBend = at(0, FET_LEG_START);
+    const sourceBend = at(0, -FET_LEG_START);
+    const body = at(-FET_CHANNEL);
 
-    const offsetBy = (point: Point, step: Point, amount: number) => ({
-      x: point.x + step.x * amount,
-      y: point.y + step.y * amount,
-    });
+    this.line(gate, at(-MOSFET_GATE), this.voltageColor(vg));
+    this.line(at(-MOSFET_GATE, 7), at(-MOSFET_GATE, -7), this.voltageColor(vg));
 
-    const drainChannel = offsetBy(channel, toDrain, 16);
-    const sourceChannel = offsetBy(channel, toSource, 16);
-
-    this.line(start, plate, this.voltageColor(vg));
-    this.line(
-      offsetBy(plate, toDrain, 14),
-      offsetBy(plate, toSource, 14),
-      this.voltageColor(vg),
-    );
-
-    // An enhancement channel: three segments between drain and source.
-    for (const along of [0, 0.4, 0.8]) {
+    // An enhancement channel: three segments, at the drain, the body and the source.
+    for (const [from, to] of [
+      [4.5, 8],
+      [-1.75, 1.75],
+      [-8, -4.5],
+    ] as const) {
       this.line(
-        interpolate(drainChannel, sourceChannel, along),
-        interpolate(drainChannel, sourceChannel, along + 0.2),
+        at(-FET_CHANNEL, from),
+        at(-FET_CHANNEL, to),
         this.voltageColor((vs + vd) / 2),
       );
     }
 
-    this.line(drainChannel, drain, this.voltageColor(vd));
-    this.line(sourceChannel, source, this.voltageColor(vs));
-    this.line(channel, end, this.voltageColor(vs));
-    this.line(end, source, this.voltageColor(vs));
+    this.line(drainStub, drainBend, this.voltageColor(vd));
+    this.line(drainBend, drain, this.voltageColor(vd));
+    this.line(sourceStub, sourceBend, this.voltageColor(vs));
+    this.line(sourceBend, source, this.voltageColor(vs));
+    // The body ties to the source.
+    this.line(body, at(0), this.voltageColor(vs));
+    this.line(at(0), sourceBend, this.voltageColor(vs));
 
     // The body arrow points into an N-channel device and out of a P-channel one.
-    const tip = element.polarity === 1 ? channel : end;
-    const tail = element.polarity === 1 ? end : channel;
+    if (element.polarity === 1) {
+      this.arrowHead(body, at(0), this.voltageColor(vs));
+    } else {
+      this.arrowHead(at(-1), body, this.voltageColor(vs));
+    }
 
-    this.line(tip, interpolate(tip, tail, 0.6, 3), this.voltageColor(vs));
-    this.line(tip, interpolate(tip, tail, 0.6, -3), this.voltageColor(vs));
-    this.dots([drain, drainChannel, sourceChannel, source], 2);
-    this.sideLabel(element, end, 22);
+    this.dots([drain, drainBend, drainStub, sourceStub, sourceBend, source], 2);
+    this.transistorLabel(element, 6);
   }
 
   private drawJfet(element: CircuitElement) {
@@ -1071,40 +1099,34 @@ export class SchematicPainter {
       return;
     }
 
-    const { start, end } = element;
-    const length = distance(start, end) || 1;
-    const channel = interpolate(start, end, 1 - 10 / length);
-    const arrowBack = interpolate(start, end, 1 - 18 / length);
-    // Unit steps from the axis toward the drain and source sides.
-    const toDrain = { x: (drain.x - end.x) / 16, y: (drain.y - end.y) / 16 };
-    const toSource = { x: (source.x - end.x) / 16, y: (source.y - end.y) / 16 };
-
-    const offsetBy = (point: Point, step: Point, amount: number) => ({
-      x: point.x + step.x * amount,
-      y: point.y + step.y * amount,
-    });
-
-    const drainChannel = offsetBy(channel, toDrain, 16);
-    const sourceChannel = offsetBy(channel, toSource, 16);
+    const at = transistorFrame(element, drain);
+    const channel = at(-FET_CHANNEL);
+    const drainStub = at(-FET_CHANNEL, FET_LEG_START);
+    const sourceStub = at(-FET_CHANNEL, -FET_LEG_START);
+    const drainBend = at(0, FET_LEG_START);
+    const sourceBend = at(0, -FET_LEG_START);
 
     // The gate runs into a solid channel, which is never cut off by a gap as a MOSFET's.
-    this.line(start, channel, this.voltageColor(vg));
+    this.line(gate, channel, this.voltageColor(vg));
     this.line(
-      offsetBy(channel, toDrain, 20),
-      offsetBy(channel, toSource, 20),
+      at(-FET_CHANNEL, 9),
+      at(-FET_CHANNEL, -9),
       this.voltageColor((vs + vd) / 2),
     );
-    this.line(drainChannel, drain, this.voltageColor(vd));
-    this.line(sourceChannel, source, this.voltageColor(vs));
+    this.line(drainStub, drainBend, this.voltageColor(vd));
+    this.line(drainBend, drain, this.voltageColor(vd));
+    this.line(sourceStub, sourceBend, this.voltageColor(vs));
+    this.line(sourceBend, source, this.voltageColor(vs));
 
     // The gate arrow points into an N-channel device and out of a P-channel one.
-    const tip = element.polarity === 1 ? channel : arrowBack;
-    const tail = element.polarity === 1 ? arrowBack : channel;
+    if (element.polarity === 1) {
+      this.arrowHead(channel, at(-FET_CHANNEL - 6), this.voltageColor(vg));
+    } else {
+      this.arrowHead(at(-FET_CHANNEL - 6), channel, this.voltageColor(vg));
+    }
 
-    this.line(tip, interpolate(tip, tail, 0.75, 3), this.voltageColor(vg));
-    this.line(tip, interpolate(tip, tail, 0.75, -3), this.voltageColor(vg));
-    this.dots([drain, drainChannel, sourceChannel, source], 2);
-    this.sideLabel(element, end, 26);
+    this.dots([drain, drainBend, drainStub, sourceStub, sourceBend, source], 2);
+    this.transistorLabel(element, 6);
   }
 
   private drawOpAmp(element: CircuitElement) {
@@ -1331,6 +1353,53 @@ export class SchematicPainter {
         ),
       );
     }
+  }
+
+  /**
+   * A filled arrowhead with its point at `tip`, pointing away from `from`. Stroked
+   * arrowheads blur into a smudge at schematic scale.
+   */
+  private arrowHead(tip: Point, from: Point, color: string) {
+    const { context } = this;
+    const reach = distance(tip, from) || 1;
+    const back = interpolate(tip, from, ARROW_LENGTH / reach);
+
+    const wingA = interpolate(back, tip, 0, ARROW_HALF_WIDTH);
+    const wingB = interpolate(back, tip, 0, -ARROW_HALF_WIDTH);
+
+    context.fillStyle = color;
+    context.beginPath();
+    context.moveTo(tip.x, tip.y);
+    context.lineTo(wingA.x, wingA.y);
+    context.lineTo(wingB.x, wingB.y);
+    context.closePath();
+    context.fill();
+  }
+
+  /**
+   * A transistor's designator and part, beyond the end of its body on the axis, where
+   * no lead runs: beside it when the axis is level, above or below it when upright.
+   */
+  private transistorLabel(element: CircuitElement, reach: number) {
+    if (!this.options.showValues) {
+      return;
+    }
+
+    const { start, end } = element;
+    const length = distance(start, end) || 1;
+    const x = (end.x - start.x) / length;
+    const y = (end.y - start.y) / length;
+    const isLevel = Math.abs(x) >= Math.abs(y);
+    const gap = isLevel ? reach : reach + LABEL_SIZE / 2;
+    const at = { x: end.x + x * gap, y: end.y + y * gap };
+
+    const align: CanvasTextAlign = !isLevel
+      ? "center"
+      : x > 0
+        ? "left"
+        : "right";
+
+    this.partLabel(element, labelLines(element).join("  "), at, align);
   }
 
   /** Designator and part name above `at`, for multi-post parts. */

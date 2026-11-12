@@ -86,16 +86,14 @@ const GLYPHS: Record<ToolId | "more", ReactNode> = {
   ),
   npn: (
     <>
-      <circle cx="13" cy="12" r="8" />
-      <path d="M2 12h7M9 7.5v9M9 10l6-3.5V2M9 14l6 3.5V22" />
-      <path d="m14.2 17-1.2-2.5-1.6 2.8Z" fill="currentColor" />
+      <path d="M2 12h7M9 6v12M9 10l7-4V2M9 14l7 4v4" />
+      <path d="m15.3 17.6-3.6-.2 1.6-2.8Z" fill="currentColor" />
     </>
   ),
   pnp: (
     <>
-      <circle cx="13" cy="12" r="8" />
-      <path d="M2 12h7M9 7.5v9M9 10l6-3.5V2M9 14l6 3.5V22" />
-      <path d="m11.1 15.2 1.2 2.5 1.6-2.7Z" fill="currentColor" />
+      <path d="M2 12h7M9 6v12M9 10l7-4V2M9 14l7 4v4" />
+      <path d="m11.1 15.2 2 3 1.6-2.8Z" fill="currentColor" />
     </>
   ),
   nmos: (
