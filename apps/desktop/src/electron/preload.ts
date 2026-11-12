@@ -42,6 +42,8 @@ const api: LunarSpiceApi = {
   deleteCircuit: (name) => invoke("circuits:delete", name),
   circuitPath: (name) => invoke("circuits:path", name),
   openCircuitFile: () => invoke("circuits:open-dialog"),
+  exportCircuitFile: (name, text) =>
+    invoke("circuits:export-dialog", name, text),
   showCircuitsFolder: () => invoke("circuits:show-folder"),
   onCircuitsChanged: (listener) => listen("circuits:changed", listener),
   onCircuitOpened: (listener) => {

@@ -41,6 +41,10 @@ export type InvokeChannels = {
   "circuits:delete": { args: [name: string]; result: void };
   "circuits:show-folder": { args: []; result: void };
   "circuits:open-dialog": { args: []; result: OpenedCircuit | null };
+  "circuits:export-dialog": {
+    args: [name: string, text: string];
+    result: string | null;
+  };
   "app:info": { args: []; result: AppInfo };
 };
 

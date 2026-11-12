@@ -51,6 +51,11 @@ export function freeName(title: string, isTaken: (name: string) => boolean) {
   return name;
 }
 
+/** The name a circuit exports under: `<title>.circuit`, made safe for a file name. */
+export function exportName(title: string) {
+  return `${toFileTitle(title)}${CIRCUIT_EXTENSION}`;
+}
+
 /**
  * A title made safe for a file name on Linux, macOS and in browser storage: no control
  * characters, slashes, colons or leading dots. Never empty.

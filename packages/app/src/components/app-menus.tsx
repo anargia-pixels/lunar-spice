@@ -224,7 +224,7 @@ function OpenRecentItems() {
   );
 }
 
-/** Starting, opening and saving circuits, and the settings. */
+/** Starting, opening and saving circuits, importing and exporting files, and the settings. */
 export function FileMenu({
   isDraft,
   canCopyPath,
@@ -245,7 +245,6 @@ export function FileMenu({
       <MenubarTrigger>File</MenubarTrigger>
       <MenubarContent>
         <AppCommandItem command="new-circuit" label="New circuit" />
-        <AppCommandItem command="open-file" label="Open file…" />
         <MenubarSub>
           <MenubarSubTrigger>Open recent</MenubarSubTrigger>
           <MenubarSubContent className="max-w-80 min-w-64">
@@ -272,6 +271,9 @@ export function FileMenu({
         {canCopyPath && (
           <MenubarItem onClick={onCopyPath}>Copy path</MenubarItem>
         )}
+        <MenubarSeparator />
+        <AppCommandItem command="import-file" label="Import…" />
+        <AppCommandItem command="export-file" label="Export…" />
         <MenubarSeparator />
         <MenubarItem variant="destructive" onClick={onDelete}>
           {isDraft ? "Discard draft…" : "Delete circuit…"}

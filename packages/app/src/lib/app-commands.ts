@@ -14,6 +14,7 @@ import { activeBuffer, useCircuitStore } from "../stores/circuit-store";
 import { useLayoutStore } from "../stores/layout-store";
 import { useSimulationStore } from "../stores/simulation-store";
 import { useZoomStore } from "../stores/zoom-store";
+import { exportActiveCircuit } from "./export-circuit-file";
 import { openCircuitFile } from "./open-circuit-file";
 import { ownsWindow } from "./platform";
 
@@ -69,11 +70,20 @@ const APP_SHORTCUTS = [
     needsOwnWindow: true,
   },
   {
-    id: "open-file",
-    label: "Open file",
+    id: "import-file",
+    label: "Import a circuit file",
     section: "App",
     keys: [{ key: "o", mod: true, shift: false }],
     run: () => void openCircuitFile(),
+  },
+  {
+    // Inkscape's Export key; Firefox keeps it for its developer tools.
+    id: "export-file",
+    label: "Export the circuit to a file",
+    section: "App",
+    keys: [{ key: "e", mod: true, shift: true }],
+    run: () => void exportActiveCircuit(),
+    needsOwnWindow: true,
   },
   {
     id: "save",

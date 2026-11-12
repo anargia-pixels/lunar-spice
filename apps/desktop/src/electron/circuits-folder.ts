@@ -125,6 +125,31 @@ export function registerCircuitsFolder() {
 
     return readOpenedCircuit(path);
   });
+  handle("circuits:export-dialog", async (event, name, text) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+
+    // Both write the same text, in Falstad's format; `.txt` is what Falstad's exports use.
+    const options = {
+      title: "Export circuit",
+      defaultPath: join(app.getPath("documents"), name),
+      filters: [
+        { name: "Circuit", extensions: [CIRCUIT_EXTENSION.slice(1)] },
+        { name: "Falstad text", extensions: ["txt"] },
+      ],
+    };
+
+    const result = window
+      ? await dialog.showSaveDialog(window, options)
+      : await dialog.showSaveDialog(options);
+
+    if (result.canceled || !result.filePath) {
+      return null;
+    }
+
+    await writeFile(result.filePath, text, "utf8");
+
+    return result.filePath;
+  });
 
   // fs.watch fires several events per change, so wait for a quiet 150 ms, then
   // tell every window once.

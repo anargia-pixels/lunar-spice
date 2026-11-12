@@ -34,6 +34,11 @@ export type Platform = CircuitStorage & {
   version: string; // Shown by the logo in the menu bar.
   openCircuitFile: () => Promise<OpenedCircuit | null>; // Null when cancelled.
   /**
+   * Writes `text` to a file outside the saved circuits, suggesting `name`. Returns where
+   * it went, a path or a downloaded file's name; null when cancelled.
+   */
+  exportCircuitFile: (name: string, text: string) => Promise<string | null>;
+  /**
    * Calls `listener` with each file the OS asks the app to open, such as a
    * double-clicked file. Absent where nothing opens the app that way.
    */

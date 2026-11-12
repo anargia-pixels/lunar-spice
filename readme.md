@@ -46,9 +46,10 @@ View › Schematic font.
 ## Files
 
 The desktop app saves circuits in `~/Documents/lunar-spice` as `.circuit` files in
-Falstad's text format; the web app keeps them in the browser's storage (IndexedDB).
-Falstad exports (`.txt`) open directly; components Lunar Spice lacks are left out with a
-warning.
+Falstad's text format; the web app keeps them in the browser's storage (IndexedDB). File ›
+Import… opens a `.circuit` file or a Falstad export (`.txt`) as a draft; components Lunar
+Spice lacks are left out with a warning. File › Export… writes the open circuit to a file
+(a download on the web), so circuits move between browsers and the desktop app.
 
 ## Keyboard
 
