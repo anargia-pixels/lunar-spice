@@ -6,6 +6,8 @@ import {
   unescapeText,
 } from "../element";
 import { interpolatePair, type Point, roundPoint } from "../geometry";
+import type { MnaSystem } from "../mna-system";
+import { SignalMeter } from "../signal-meter";
 import { formatSi } from "../units";
 
 /** A wire joins its posts into one node; its current comes from the currents around it. */
@@ -351,13 +353,13 @@ export class NetLabel extends CircuitElement {
 }
 
 /** A voltmeter between its posts: first post minus second. It draws no current. */
-export class Probe extends CircuitElement {
-  readonly kind = "probe";
+export class Voltmeter extends CircuitElement {
+  readonly kind = "voltmeter";
   readonly dumpType = "p";
-  override readonly designatorPrefix = "P";
+  override readonly designatorPrefix = "VM";
 
   name() {
-    return "Voltage probe";
+    return "Voltmeter";
   }
 
   override isMeter() {
@@ -374,5 +376,93 @@ export class Probe extends CircuitElement {
 
   override dumpValues() {
     return [0];
+  }
+}
+
+/** Formats a reading with four significant digits, or a dash while there is none. */
+function formatReading(value: number | null | undefined, unit: string) {
+  return value === null || value === undefined ? "–" : formatSi(value, unit, 4);
+}
+
+/**
+ * A voltage probe, as in Multisim: one post, read against ground. Beside the voltage
+ * it reads the signal's peak-to-peak, RMS, DC and frequency during the interactive
+ * simulation. It is Falstad's output element, so Falstad opens it too. It draws no
+ * current.
+ */
+export class VoltageProbe extends CircuitElement {
+  readonly kind = "voltage-probe";
+  readonly dumpType = "O";
+  override readonly designatorPrefix = "PR";
+  /** Falstad's display scale for the reading, kept so its files save unchanged. */
+  scale = 0;
+  readonly meter = new SignalMeter();
+
+  static override read(
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    flags: number,
+    reader: TokenReader,
+  ) {
+    const probe = new VoltageProbe(x1, y1, x2, y2, flags);
+
+    probe.scale = reader.number(0);
+
+    return probe;
+  }
+
+  name() {
+    return "Voltage probe";
+  }
+
+  override posts(): Point[] {
+    return [this.start];
+  }
+
+  override isMeter() {
+    return true;
+  }
+
+  /** Its post's voltage to ground. */
+  get voltage() {
+    return this.volts[0] ?? 0;
+  }
+
+  /** The readout lines, Multisim's: V, V(p-p), V(rms), V(dc) and frequency. */
+  readings() {
+    const reading = this.meter.reading;
+
+    return [
+      `V: ${formatSi(this.voltage, "V", 4)}`,
+      `V(p-p): ${formatReading(reading?.peakToPeak, "V")}`,
+      `V(rms): ${formatReading(reading?.rms, "V")}`,
+      `V(dc): ${formatReading(reading?.dc, "V")}`,
+      `Freq: ${formatReading(reading?.frequency, "Hz")}`,
+    ];
+  }
+
+  override valueLabel() {
+    return formatSi(this.voltage, "V");
+  }
+
+  override info() {
+    return [this.title(), ...this.readings()];
+  }
+
+  override finishStep(system: MnaSystem) {
+    if (system.mode === "transient") {
+      this.meter.add(this.voltage, system.timeStep);
+    }
+  }
+
+  override reset() {
+    super.reset();
+    this.meter.reset();
+  }
+
+  override dumpValues() {
+    return [this.scale];
   }
 }

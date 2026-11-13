@@ -8,9 +8,10 @@ import { Microphone, Speaker } from "./elements/audio";
 import {
   Ground,
   NetLabel,
-  Probe,
   SpdtSwitch,
   Switch,
+  VoltageProbe,
+  Voltmeter,
   Wire,
 } from "./elements/connectors";
 import {
@@ -111,7 +112,8 @@ const ELEMENT_CLASSES: Record<ElementKind, ElementClass> = {
   wire: Wire,
   ground: Ground,
   label: NetLabel,
-  probe: Probe,
+  voltmeter: Voltmeter,
+  "voltage-probe": VoltageProbe,
   resistor: Resistor,
   potentiometer: Potentiometer,
   "variable-resistor": VariableResistor,

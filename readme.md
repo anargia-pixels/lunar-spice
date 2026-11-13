@@ -23,8 +23,9 @@ switch · diode and Zener · LED · NPN/PNP · N/P-channel MOSFET · N/P-channel
 (gain, GBW, slew rate, Rin, Rout, offset, swing) · Schmitt trigger, buffer or inverter
 (thresholds, output levels, output resistance, slew rate) · fixed regulator (7805-style) ·
 adjustable regulator (LM317-style) · 555 timer · electret microphone (live from your
-microphone, or a test tone) · speaker (plays through your speakers) · voltage probe · net
-label · ground.
+microphone, or a test tone) · speaker (plays through your speakers) · voltmeter · voltage
+probe (to ground, with V(p-p), V(rms), V(dc) and frequency, as in Multisim) · net label ·
+ground.
 
 Parts have a fixed size, as in Multisim: a click places one, and `[` `]`, H and V turn or
 mirror it before you click. Only wires stretch. The interactive simulation runs in real

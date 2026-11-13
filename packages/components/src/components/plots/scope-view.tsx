@@ -341,6 +341,49 @@ function TriggerRow({
   );
 }
 
+/** Formats a measurement with four significant digits, or a dash while there is none. */
+function formatMeasurement(value: number | null | undefined, unit: string) {
+  return value === null || value === undefined ? "–" : formatSi(value, unit, 4);
+}
+
+/**
+ * The voltage's frequency and peak-to-peak, measured over whole cycles at every
+ * simulation step, as a bench scope's measurements. They are read on a timer.
+ */
+function ScopeMeasurements({ scope }: { scope: Scope }) {
+  const [measurements, setMeasurements] = useState({
+    frequency: "–",
+    peakToPeak: "–",
+  });
+
+  useEffect(() => {
+    const read = () => {
+      const { reading } = scope.meter;
+      const frequency = formatMeasurement(reading?.frequency, "Hz");
+      const peakToPeak = formatMeasurement(reading?.peakToPeak, "V");
+
+      setMeasurements((current) =>
+        current.frequency === frequency && current.peakToPeak === peakToPeak
+          ? current
+          : { frequency, peakToPeak },
+      );
+    };
+
+    read();
+
+    const timer = setInterval(read, POLL_MS);
+
+    return () => clearInterval(timer);
+  }, [scope]);
+
+  return (
+    <div className="text-muted-foreground flex items-center gap-x-3 text-xs tabular-nums">
+      <span>Freq {measurements.frequency}</span>
+      <span>Vpp {measurements.peakToPeak}</span>
+    </div>
+  );
+}
+
 /** The value of `quantity` at `time`, or null where the trace has no sample yet. */
 function valueAt(scope: Scope, quantity: ScopeQuantity, time: number) {
   const { values, times } = orderedSamples(scope, quantity);
@@ -482,7 +525,7 @@ function ScopeCursorReadout({
 }
 
 /**
- * One scope's card: its controls, both strips and the cursor readout. Hovering a strip
+ * One scope's card: its controls, both strips, the measurements and the cursor readout. Hovering a strip
  * shows a crosshair on both; clicks place cursor A, then B, and a third click starts
  * over at A.
  */
@@ -563,6 +606,7 @@ function ScopeCard({
       <TriggerRow scope={scope} onChange={onSettingsChange} />
       {strip("voltage")}
       {strip("current")}
+      <ScopeMeasurements scope={scope} />
       <ScopeCursorReadout
         scope={scope}
         cursors={cursors}

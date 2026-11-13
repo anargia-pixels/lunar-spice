@@ -158,10 +158,16 @@ const GLYPHS: Record<ToolId | "more", ReactNode> = {
       <path d="M3 7h3M3 12h3M3 17h3M18 7h3M18 12h3M18 17h3" />
     </>
   ),
-  probe: (
+  voltmeter: (
     <>
       <circle cx="12" cy="12" r="7" />
       <path d="M12 2v3M12 19v3M9 9l3 6 3-6" />
+    </>
+  ),
+  "voltage-probe": (
+    <>
+      <path d="M3 21l6-6" />
+      <path d="M9 15l2-6 10-6-6 10Z" />
     </>
   ),
   label: <path d="M2 12h5M7 8h9l4 4-4 4H7Z" />,

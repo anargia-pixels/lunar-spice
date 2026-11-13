@@ -11,14 +11,14 @@ type Trace = {
   /** How results show it, such as `V(out)`. */
   name: string;
   unit: "V" | "A";
-  /** True for net labels and probes, which results show first and plot by default. */
+  /** True for net labels and meters, which results show first and plot by default. */
   isFeatured: boolean;
   values: number[];
 };
 
 export type OperatingPointResult = {
   kind: "dc";
-  /** Featured first. `net` is the net's own name, or null for a probe's reading. */
+  /** Featured first. `net` is the net's own name, or null for a meter's reading. */
   nets: {
     name: string;
     net: string | null;
@@ -100,7 +100,7 @@ function acNet(
   return { name, isFeatured, magnitude: [], phase: [] };
 }
 
-/** Returns `items` with the featured ones (labeled nets, probes) first, in order. */
+/** Returns `items` with the featured ones (labeled nets, meters) first, in order. */
 function featuredFirst<T extends { isFeatured: boolean }>(items: T[]) {
   return [
     ...items.filter(({ isFeatured }) => isFeatured),
@@ -122,7 +122,7 @@ const MAX_RESULT_POINTS = 4000;
 /** Most time steps a transient analysis may take. */
 const MAX_TRANSIENT_STEPS = 2_000_000;
 
-/** Names a voltage as results show it, such as `V(out)` for a net or `V(P1)` for a probe. */
+/** Names a voltage as results show it, such as `V(out)` for a net or `V(PR1)` for a meter. */
 export function voltageName(name: string) {
   return `V(${name})`;
 }
@@ -133,8 +133,9 @@ function currentName(designator: string) {
 }
 
 /**
- * Returns every voltage results list, featured first: each net to ground, then each probe
- * from its first post to its second. `net` is the net's own name; null for a probe.
+ * Returns every voltage results list, featured first: each net to ground, then each
+ * meter: a voltmeter from its first post to its second, a voltage probe to ground. `net`
+ * is the net's own name; null for a meter.
  */
 function voltageChannels(simulation: Simulation, circuit: Circuit) {
   return featuredFirst([
@@ -146,11 +147,11 @@ function voltageChannels(simulation: Simulation, circuit: Circuit) {
     })),
     ...circuit.elements
       .filter((element) => element.isMeter())
-      .map((probe) => ({
-        name: voltageName(probe.designator),
+      .map((meter) => ({
+        name: voltageName(meter.designator),
         net: null,
         isFeatured: true,
-        nodes: [probe.node(0), probe.node(1)] as const,
+        nodes: [meter.node(0), meter.node(1)] as const,
       })),
   ]);
 }
@@ -163,7 +164,7 @@ function channelVoltage(
   return simulation.system.value(a) - simulation.system.value(b);
 }
 
-/** Returns the elements whose current results list: all with a designator but probes. */
+/** Returns the elements whose current results list: all with a designator but meters. */
 function measuredElements(circuit: Circuit) {
   return circuit.elements.filter(
     (element) => element.designator && !element.isMeter(),

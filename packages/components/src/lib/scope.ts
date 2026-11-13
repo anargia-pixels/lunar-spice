@@ -1,3 +1,5 @@
+import { SignalMeter } from "@lunar-spice/simulator/signal-meter";
+
 /** Buckets across a scope's time span; each holds the lowest and highest sample of its steps. */
 const BUCKETS_PER_SPAN = 512;
 
@@ -59,6 +61,8 @@ export type Scope = {
   triggerLevel: number | null;
   /** The largest voltage recorded since the trace started, either side of 0. */
   peakVoltage: number;
+  /** Measures the voltage at every step: its frequency and peak-to-peak. */
+  meter: SignalMeter;
   /** Steps in the bucket being filled. */
   pendingSteps: number;
   pendingVoltage: Extremes;
@@ -103,6 +107,7 @@ export function createScope(
     isTriggered: true,
     triggerLevel: null,
     peakVoltage: 0,
+    meter: new SignalMeter(),
     pendingSteps: 0,
     pendingVoltage: emptyExtremes(),
     pendingCurrent: emptyExtremes(),
@@ -148,6 +153,7 @@ export function recordSample(
   }
 
   scope.peakVoltage = Math.max(scope.peakVoltage, Math.abs(voltage));
+  scope.meter.add(voltage, timeStep);
   widen(scope.pendingVoltage, voltage);
   widen(scope.pendingCurrent, current);
   scope.pendingSteps += 1;
@@ -170,6 +176,7 @@ export function recordSample(
 export function clearScope(scope: Scope) {
   scope.count = 0;
   scope.peakVoltage = 0;
+  scope.meter.reset();
   scope.pendingSteps = 0;
   scope.pendingVoltage = emptyExtremes();
   scope.pendingCurrent = emptyExtremes();

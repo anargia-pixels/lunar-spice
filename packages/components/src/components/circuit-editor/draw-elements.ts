@@ -7,6 +7,7 @@ import {
   SpdtSwitch,
   Switch,
   THROW_OFFSET,
+  VoltageProbe,
 } from "@lunar-spice/simulator/elements/connectors";
 import {
   TIMER_PINS,
@@ -62,6 +63,15 @@ export type ElementLook = {
 const LINE_WIDTH = 2;
 
 const LABEL_SIZE = 11;
+
+/** How long a voltage probe's head is, back from its end toward its post. */
+const PROBE_HEAD = 18;
+
+/** Half the width of a voltage probe's head. */
+const PROBE_HEAD_HALF = 5;
+
+/** How far a voltage probe's readout sits from the end of its head. */
+const PROBE_LABEL_GAP = 10;
 
 /** Radius of the bubble at an inverting Schmitt trigger's output. */
 const SCHMITT_BUBBLE_RADIUS = 3;
@@ -141,7 +151,8 @@ export class SchematicPainter {
     wire: (element) => this.drawWire(element),
     ground: (element) => this.drawGround(element),
     label: (element) => this.drawLabel(element),
-    probe: (element) => this.drawProbe(element),
+    voltmeter: (element) => this.drawVoltmeter(element),
+    "voltage-probe": (element) => this.drawVoltageProbe(element),
     resistor: (element) => this.drawResistor(element),
     potentiometer: (element) => this.drawPotentiometer(element),
     "variable-resistor": (element) => this.drawVariableResistor(element),
@@ -498,7 +509,7 @@ export class SchematicPainter {
     this.text(text, { x: x + width / 2, y: y + 8 });
   }
 
-  private drawProbe(element: CircuitElement) {
+  private drawVoltmeter(element: CircuitElement) {
     const [a, b] = this.bodyEnds(element, 28);
     const [first = 0, second = 0] = element.volts;
     const middle = interpolate(element.start, element.end, 0.5);
@@ -512,6 +523,64 @@ export class SchematicPainter {
     this.text("V", middle, "center", 12);
 
     this.valueLabel(element, 18);
+  }
+
+  /**
+   * A lead from the post to a pointed probe head at the far end, with Multisim's readout
+   * beside the head: the designator, then V, V(p-p), V(rms), V(dc) and frequency.
+   */
+  private drawVoltageProbe(element: CircuitElement) {
+    const { start, end } = element;
+    const [voltage = 0] = element.volts;
+    const length = distance(start, end) || 1;
+    const tip = interpolate(start, end, Math.max(0, 1 - PROBE_HEAD / length));
+    const color = this.voltageColor(voltage);
+    const { context } = this;
+
+    this.line(start, tip, color);
+
+    const head = [
+      tip,
+      interpolate(tip, end, 0.35, PROBE_HEAD_HALF),
+      interpolate(tip, end, 1, PROBE_HEAD_HALF),
+      interpolate(tip, end, 1, -PROBE_HEAD_HALF),
+      interpolate(tip, end, 0.35, -PROBE_HEAD_HALF),
+    ];
+
+    context.strokeStyle = color;
+    context.beginPath();
+
+    for (const point of head) {
+      context.lineTo(point.x, point.y);
+    }
+
+    context.closePath();
+    context.stroke();
+
+    if (!this.options.showValues || !(element instanceof VoltageProbe)) {
+      return;
+    }
+
+    const lines = [element.designator, ...element.readings()].filter(Boolean);
+    const lineHeight = LABEL_SIZE + 2;
+    const blockHeight = (lines.length - 1) * lineHeight;
+    const isLeft = end.x < start.x;
+
+    // The block grows away from the post, so it never covers the lead or the wire:
+    // above the end when the probe points up, below when down, centered when level.
+    const top = end.y - (blockHeight * (1 - Math.sign(end.y - start.y))) / 2;
+
+    lines.forEach((content, index) =>
+      this.partLabel(
+        element,
+        content,
+        {
+          x: end.x + (isLeft ? -PROBE_LABEL_GAP : PROBE_LABEL_GAP),
+          y: top + index * lineHeight,
+        },
+        isLeft ? "right" : "left",
+      ),
+    );
   }
 
   /** The resistor body between `a` and `b`, shaded from one post's voltage to the other's. */

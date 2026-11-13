@@ -7,7 +7,8 @@ export type ElementKind =
   | "wire"
   | "ground"
   | "label"
-  | "probe"
+  | "voltmeter"
+  | "voltage-probe"
   | "resistor"
   | "potentiometer"
   | "variable-resistor"
@@ -290,7 +291,10 @@ export abstract class CircuitElement {
     return null;
   }
 
-  /** True for a voltmeter, whose reading results list beside the nets. */
+  /**
+   * True for a voltmeter or voltage probe, whose reading results list beside the nets:
+   * its first post against its second, or against ground when it has one post.
+   */
   isMeter() {
     return false;
   }
