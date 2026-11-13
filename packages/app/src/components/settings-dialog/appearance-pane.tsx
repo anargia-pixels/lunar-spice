@@ -1,6 +1,8 @@
 import { RotateLeft01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
+  GRID_STYLES,
+  GRID_STYLE_KEYS,
   RESISTOR_STYLES,
   type ResistorStyle,
   SCHEMATIC_FONTS,
@@ -195,6 +197,35 @@ function SchematicSettings() {
           />
         </div>
       ))}
+      <div className="flex items-center justify-between gap-6">
+        <span className="text-sm">Grid style</span>
+        <Select
+          items={GRID_STYLES}
+          value={display.gridStyle}
+          disabled={!display.showGrid}
+          onValueChange={(next) => {
+            const style = GRID_STYLE_KEYS.find((key) => key === next);
+
+            if (style) {
+              setDisplay({ gridStyle: style });
+            }
+          }}
+        >
+          <SelectTrigger
+            className="w-64 justify-between"
+            aria-label="Grid style"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false}>
+            {GRID_STYLE_KEYS.map((style) => (
+              <SelectItem key={style} value={style}>
+                {GRID_STYLES[style]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
       <div className="flex items-center justify-between gap-6">
         <span className="text-sm">Resistor symbol</span>
         <Select

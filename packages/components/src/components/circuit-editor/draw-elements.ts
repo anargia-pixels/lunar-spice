@@ -42,7 +42,7 @@ import type { DisplayOptions } from "./display-options";
  * How the schematic is drawn: the appearance settings, the theme's palette and the
  * circuit's voltage range.
  */
-export type DrawOptions = Omit<DisplayOptions, "showGrid"> & {
+export type DrawOptions = Omit<DisplayOptions, "showGrid" | "gridStyle"> & {
   palette: CanvasPalette;
   /** Voltage drawn at full color. */
   voltageRange: number;

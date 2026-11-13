@@ -4,6 +4,7 @@ import type { Bounds } from "@lunar-spice/simulator/layout";
 import { formatSi } from "@lunar-spice/simulator/units";
 
 import type { Camera } from "./camera";
+import type { GridStyle } from "./display-options";
 import type { SchematicPainter } from "./draw-elements";
 
 /** How many posts meet at one point, for junction dots. */
@@ -32,12 +33,16 @@ export type Scene = {
   /** Operating-point voltage tags, each at its net's busiest junction. */
   voltageTags: readonly { point: Point; voltage: number }[];
   showGrid: boolean;
+  gridStyle: GridStyle;
   voltageAt: (point: Point) => number;
   dotOffsetsOf: (element: CircuitElement) => readonly number[];
 };
 
-/** Grid dots this close together are thinned out, in CSS pixels. */
+/** Grid dots or lines this close together are thinned out, in CSS pixels. */
 const MIN_GRID_SPACING = 12;
+
+/** Opacity of grid lines, which cover far more of the canvas than grid dots. */
+const GRID_LINE_ALPHA = 0.55;
 
 /** Opacity of the part a placing tool shows under the pointer. */
 const GHOST_ALPHA = 0.5;
@@ -61,7 +66,7 @@ export function renderScene(
   context.fillRect(0, 0, canvas.width, canvas.height);
 
   if (scene.showGrid) {
-    renderGrid(context, camera, ratio, palette.border);
+    renderGrid(context, camera, ratio, palette.border, scene.gridStyle);
   }
 
   // Schematic, in schematic units
@@ -125,12 +130,16 @@ export function renderScene(
   }
 }
 
-/** Draws a dot at each grid point; doubles the spacing when the dots are too close. */
+/**
+ * Draws a dot at each grid point, or a hairline along each grid line; doubles the
+ * spacing when they are too close.
+ */
 function renderGrid(
   context: CanvasRenderingContext2D,
   camera: Camera,
   ratio: number,
   color: string,
+  style: GridStyle,
 ) {
   const { canvas } = context;
   const { origin, scale } = camera;
@@ -144,9 +153,31 @@ function renderGrid(
   const startY = ((origin.y % spacing) + spacing) % spacing;
   const width = canvas.width / ratio;
   const height = canvas.height / ratio;
-  const size = Math.max(1, scale) * ratio;
-
   context.fillStyle = color;
+
+  if (style === "lines") {
+    // Whole device pixels keep each line sharp. One path fills each crossing once, so
+    // the faded lines do not darken where they meet.
+    const thickness = Math.max(1, Math.round(ratio));
+
+    context.beginPath();
+
+    for (let x = startX; x < width; x += spacing) {
+      context.rect(Math.round(x * ratio), 0, thickness, canvas.height);
+    }
+
+    for (let y = startY; y < height; y += spacing) {
+      context.rect(0, Math.round(y * ratio), canvas.width, thickness);
+    }
+
+    context.globalAlpha = GRID_LINE_ALPHA;
+    context.fill();
+    context.globalAlpha = 1;
+
+    return;
+  }
+
+  const size = Math.max(1, scale) * ratio;
 
   for (let x = startX; x < width; x += spacing) {
     for (let y = startY; y < height; y += spacing) {

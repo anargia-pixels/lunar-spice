@@ -1613,6 +1613,7 @@ export class EditorController {
             ),
       voltageTags: this.voltageTags(),
       showGrid: this.display.showGrid,
+      gridStyle: this.display.gridStyle,
       voltageAt: (point) => this.run.voltageAt(point),
       dotOffsetsOf: (element) => this.run.dotOffsetsOf(element),
     });
