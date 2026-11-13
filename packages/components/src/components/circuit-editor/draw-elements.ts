@@ -71,27 +71,33 @@ const SCHMITT_BUBBLE_RADIUS = 3;
 const POST_SPAN = 16;
 
 /** How far back from the end along the axis a BJT's base bar sits. */
-const BJT_BAR = 7;
+const BJT_BAR = 12;
+
+/** Half the length of a BJT's base bar. */
+const BJT_BAR_HALF = 9;
+
+/** Half the length of a FET's gate plate and channel. */
+const BAR_HALF = 11;
 
 /** How far back from the end along the axis a FET's channel sits. */
-const FET_CHANNEL = 8;
+const FET_CHANNEL = 12;
 
 /** How far back a MOSFET's gate plate sits, clear of its channel. */
-const MOSFET_GATE = 12;
+const MOSFET_GATE = 16;
 
 /** How far off the axis a BJT's collector and emitter lines leave its bar. */
-const BJT_LINE_START = 2;
+const BJT_LINE_START = 2.5;
 
 /** How far off the axis a BJT's legs begin, running straight out to their posts. */
-const BJT_LEG_START = 7;
+const BJT_LEG_START = 9;
 
 /** How far off the axis a FET's legs begin, past the stubs from its channel. */
-const FET_LEG_START = 6;
+const FET_LEG_START = 9;
 
-/** A filled arrowhead's length from point to back, in schematic units. */
-const ARROW_LENGTH = 5;
+/** An arrowhead's length from point to back, in schematic units. */
+const ARROW_LENGTH = 6;
 
-const ARROW_HALF_WIDTH = 2.5;
+const ARROW_HALF_WIDTH = 3.5;
 
 /**
  * Places points on a three-post transistor: `along` its axis from the end (negative back
@@ -1006,7 +1012,11 @@ export class SchematicPainter {
     const emitterBend = at(0, -BJT_LEG_START);
 
     this.line(base, barCenter, this.voltageColor(vb));
-    this.line(at(-BJT_BAR, 6), at(-BJT_BAR, -6), this.voltageColor(vb));
+    this.line(
+      at(-BJT_BAR, BJT_BAR_HALF),
+      at(-BJT_BAR, -BJT_BAR_HALF),
+      this.voltageColor(vb),
+    );
     this.line(collectorBar, collectorBend, this.voltageColor(vc));
     this.line(collectorBend, collector, this.voltageColor(vc));
     this.line(emitterBar, emitterBend, this.voltageColor(ve));
@@ -1015,13 +1025,13 @@ export class SchematicPainter {
     // The emitter arrow points out of an NPN and into a PNP.
     if (element.polarity === 1) {
       this.arrowHead(
-        interpolate(emitterBar, emitterBend, 0.9),
+        interpolate(emitterBar, emitterBend, 0.8),
         emitterBar,
         this.voltageColor(ve),
       );
     } else {
       this.arrowHead(
-        interpolate(emitterBar, emitterBend, 0.25),
+        interpolate(emitterBar, emitterBend, 0.3),
         emitterBend,
         this.voltageColor(ve),
       );
@@ -1053,13 +1063,17 @@ export class SchematicPainter {
     const body = at(-FET_CHANNEL);
 
     this.line(gate, at(-MOSFET_GATE), this.voltageColor(vg));
-    this.line(at(-MOSFET_GATE, 7), at(-MOSFET_GATE, -7), this.voltageColor(vg));
+    this.line(
+      at(-MOSFET_GATE, BAR_HALF),
+      at(-MOSFET_GATE, -BAR_HALF),
+      this.voltageColor(vg),
+    );
 
     // An enhancement channel: three segments, at the drain, the body and the source.
     for (const [from, to] of [
-      [4.5, 8],
-      [-1.75, 1.75],
-      [-8, -4.5],
+      [6.5, BAR_HALF],
+      [-2.5, 2.5],
+      [-BAR_HALF, -6.5],
     ] as const) {
       this.line(
         at(-FET_CHANNEL, from),
@@ -1080,7 +1094,7 @@ export class SchematicPainter {
     if (element.polarity === 1) {
       this.arrowHead(body, at(0), this.voltageColor(vs));
     } else {
-      this.arrowHead(at(-1), body, this.voltageColor(vs));
+      this.arrowHead(at(-2), body, this.voltageColor(vs));
     }
 
     this.dots([drain, drainBend, drainStub, sourceStub, sourceBend, source], 2);
@@ -1109,8 +1123,8 @@ export class SchematicPainter {
     // The gate runs into a solid channel, which is never cut off by a gap as a MOSFET's.
     this.line(gate, channel, this.voltageColor(vg));
     this.line(
-      at(-FET_CHANNEL, 9),
-      at(-FET_CHANNEL, -9),
+      at(-FET_CHANNEL, BAR_HALF),
+      at(-FET_CHANNEL, -BAR_HALF),
       this.voltageColor((vs + vd) / 2),
     );
     this.line(drainStub, drainBend, this.voltageColor(vd));
@@ -1120,9 +1134,9 @@ export class SchematicPainter {
 
     // The gate arrow points into an N-channel device and out of a P-channel one.
     if (element.polarity === 1) {
-      this.arrowHead(channel, at(-FET_CHANNEL - 6), this.voltageColor(vg));
+      this.arrowHead(channel, at(-FET_CHANNEL - 8), this.voltageColor(vg));
     } else {
-      this.arrowHead(at(-FET_CHANNEL - 6), channel, this.voltageColor(vg));
+      this.arrowHead(at(-FET_CHANNEL - 9), channel, this.voltageColor(vg));
     }
 
     this.dots([drain, drainBend, drainStub, sourceStub, sourceBend, source], 2);
@@ -1355,25 +1369,13 @@ export class SchematicPainter {
     }
   }
 
-  /**
-   * A filled arrowhead with its point at `tip`, pointing away from `from`. Stroked
-   * arrowheads blur into a smudge at schematic scale.
-   */
+  /** An open arrowhead, two strokes meeting at `tip`, pointing away from `from`. */
   private arrowHead(tip: Point, from: Point, color: string) {
-    const { context } = this;
     const reach = distance(tip, from) || 1;
     const back = interpolate(tip, from, ARROW_LENGTH / reach);
 
-    const wingA = interpolate(back, tip, 0, ARROW_HALF_WIDTH);
-    const wingB = interpolate(back, tip, 0, -ARROW_HALF_WIDTH);
-
-    context.fillStyle = color;
-    context.beginPath();
-    context.moveTo(tip.x, tip.y);
-    context.lineTo(wingA.x, wingA.y);
-    context.lineTo(wingB.x, wingB.y);
-    context.closePath();
-    context.fill();
+    this.line(tip, interpolate(back, tip, 0, ARROW_HALF_WIDTH), color);
+    this.line(tip, interpolate(back, tip, 0, -ARROW_HALF_WIDTH), color);
   }
 
   /**
