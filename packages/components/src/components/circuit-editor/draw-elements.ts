@@ -173,6 +173,9 @@ export class SchematicPainter {
    */
   readonly labelBoxes = new Map<number, Bounds>();
 
+  /** Where each net's tag was last drawn, by net name, so a press on one can drag it. */
+  readonly netTagBoxes = new Map<string, Bounds>();
+
   constructor(context: CanvasRenderingContext2D, options: DrawOptions) {
     this.context = context;
     this.options = options;
@@ -1477,8 +1480,8 @@ export class SchematicPainter {
     context.restore();
   }
 
-  /** A net's name or operating-point voltage in a small tag up and right of `at`. */
-  netTag(at: Point, content: string) {
+  /** Net `net`'s name or operating-point voltage in a small tag up and right of `at`. */
+  netTag(net: string, at: Point, content: string) {
     const { context } = this;
     const size = 10;
 
@@ -1491,6 +1494,12 @@ export class SchematicPainter {
     context.fillStyle = this.palette.card;
     context.strokeStyle = this.palette.border;
     context.lineWidth = 1;
+    this.netTagBoxes.set(net, {
+      left,
+      top,
+      right: left + width,
+      bottom: top + size + 6,
+    });
     context.beginPath();
     context.roundRect(left, top, width, size + 6, 3);
     context.fill();

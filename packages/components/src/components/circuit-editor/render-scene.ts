@@ -35,6 +35,8 @@ export type Scene = {
    * operating-point voltage once there is one.
    */
   netTags: readonly {
+    /** The net's name, which keys its tag even when the name is hidden. */
+    net: string;
     point: Point;
     name: string | null;
     voltage: number | null;
@@ -101,10 +103,12 @@ export function renderScene(
     painter.post(point, scene.voltageAt(point), count);
   }
 
-  for (const { point, name, voltage } of scene.netTags) {
+  painter.netTagBoxes.clear();
+
+  for (const { net, point, name, voltage } of scene.netTags) {
     const parts = [name, voltage === null ? null : formatSi(voltage, "V", 3)];
 
-    painter.netTag(point, parts.filter(Boolean).join("  "));
+    painter.netTag(net, point, parts.filter(Boolean).join("  "));
   }
 
   // Overlays: stretch handles, ghost and rubber band

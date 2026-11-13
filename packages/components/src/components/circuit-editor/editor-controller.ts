@@ -161,6 +161,30 @@ function boxBetween(a: Point, b: Point): Bounds {
   };
 }
 
+/** True for a wire, which keeps its net's moved tag. */
+function isWire(element: CircuitElement) {
+  return element.isNetElement() && element.isConductor();
+}
+
+/** The wire whose label offset places its net's moved tag; null while it sits unmoved. */
+function tagHolder(wires: readonly CircuitElement[]) {
+  return (
+    wires.find(
+      ({ labelOffset }) => labelOffset.x !== 0 || labelOffset.y !== 0,
+    ) ?? null
+  );
+}
+
+/** True when `point` is on a label's `box`, give or take the pick margin. */
+function isOnLabel(point: Point, box: Bounds) {
+  return (
+    point.x >= box.left - LABEL_PICK_MARGIN &&
+    point.x <= box.right + LABEL_PICK_MARGIN &&
+    point.y >= box.top - LABEL_PICK_MARGIN &&
+    point.y <= box.bottom + LABEL_PICK_MARGIN
+  );
+}
+
 function snapped(point: Point): Point {
   return { x: snapToGrid(point.x), y: snapToGrid(point.y) };
 }
@@ -1052,13 +1076,7 @@ export class EditorController {
     for (const element of [...this.circuit.elements].reverse()) {
       const box = this.painter.labelBoxes.get(element.id);
 
-      if (
-        box &&
-        point.x >= box.left - LABEL_PICK_MARGIN &&
-        point.x <= box.right + LABEL_PICK_MARGIN &&
-        point.y >= box.top - LABEL_PICK_MARGIN &&
-        point.y <= box.bottom + LABEL_PICK_MARGIN
-      ) {
+      if (box && isOnLabel(point, box)) {
         return element;
       }
     }
@@ -1144,6 +1162,20 @@ export class EditorController {
         kind: "end",
         before: snapshotOf(this.circuit.elements),
         ...end,
+        hasMoved: false,
+      };
+    }
+
+    // A press on a net's tag drags it; its wire keeps where it went.
+    const tag = isShift ? null : this.netTagAt(point);
+
+    if (tag) {
+      return {
+        kind: "label",
+        before: snapshotOf(this.circuit.elements),
+        element: tag.wire,
+        origin: point,
+        startOffset: tag.offset,
         hasMoved: false,
       };
     }
@@ -1245,8 +1277,12 @@ export class EditorController {
       this.moveGhost();
       const labelOwner = this.tool.kind ? null : this.labelAt(point);
 
-      if (this.isOverLabel !== (labelOwner !== null)) {
-        this.isOverLabel = labelOwner !== null;
+      const isOverLabel =
+        labelOwner !== null ||
+        (!this.tool.kind && this.netTagAt(point) !== null);
+
+      if (this.isOverLabel !== isOverLabel) {
+        this.isOverLabel = isOverLabel;
         this.updateCursor();
       }
 
@@ -1573,16 +1609,93 @@ export class EditorController {
       }
     }
 
-    return [...anchors].flatMap(([name, { post, isLabeled }]) => {
-      const voltage = netVoltages?.get(name) ?? null;
+    const wires = this.wiresByNet();
+
+    return [...anchors].flatMap(([net, { post, isLabeled }]) => {
+      const voltage = netVoltages?.get(net) ?? null;
       const isNamed = showNetNames && !isLabeled;
 
       if (!isNamed && voltage === null) {
         return [];
       }
 
-      return [{ point: post.point, name: isNamed ? name : null, voltage }];
+      // A moved tag sits where its wire's label offset puts it.
+      const holder = tagHolder(wires.get(net) ?? []);
+
+      const point = holder
+        ? {
+            x: holder.start.x + holder.labelOffset.x,
+            y: holder.start.y + holder.labelOffset.y,
+          }
+        : post.point;
+
+      return [
+        {
+          net,
+          point,
+          anchor: post.point,
+          name: isNamed ? net : null,
+          voltage,
+        },
+      ];
     });
+  }
+
+  /** The wires on each net, by the name results use. */
+  private wiresByNet() {
+    const wires = new Map<string, CircuitElement[]>();
+
+    for (const element of this.circuit.elements) {
+      const net = isWire(element) ? this.run.netAt(element.start) : null;
+
+      if (net) {
+        wires.set(net.name, [...(wires.get(net.name) ?? []), element]);
+      }
+    }
+
+    return wires;
+  }
+
+  /**
+   * The net tag under `point`, as the wire that keeps its place and that wire's label
+   * offset. An unmoved tag goes to a wire at its junction, or else any on its net; a
+   * net without wires has no tag to move.
+   */
+  private netTagAt(point: Point) {
+    const net = [...this.painter.netTagBoxes].findLast(([, box]) =>
+      isOnLabel(point, box),
+    )?.[0];
+
+    const tag = this.netTags().find((candidate) => candidate.net === net);
+
+    if (!tag) {
+      return null;
+    }
+
+    const wires = this.wiresByNet().get(tag.net) ?? [];
+    const holder = tagHolder(wires);
+
+    if (holder) {
+      return { wire: holder, offset: holder.labelOffset };
+    }
+
+    const { anchor } = tag;
+
+    const wire =
+      wires.find((candidate) =>
+        [candidate.start, candidate.end].some(
+          ({ x, y }) => x === anchor.x && y === anchor.y,
+        ),
+      ) ?? wires[0];
+
+    if (!wire) {
+      return null;
+    }
+
+    return {
+      wire,
+      offset: { x: anchor.x - wire.start.x, y: anchor.y - wire.start.y },
+    };
   }
 
   /** Steps the interactive simulation every animation frame and redraws when needed. */
