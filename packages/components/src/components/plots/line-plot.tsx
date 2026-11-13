@@ -158,8 +158,11 @@ export function LinePlot({
     canvas.width = Math.round(size.width * ratio);
     canvas.height = Math.round(size.height * ratio);
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    drawPlot(context, palette, frame, { hoverIndex, cursors });
-  }, [frame, size, hoverIndex, cursors, palette]);
+    drawPlot(context, palette, frame, {
+      hoverIndex,
+      cursors: cursors.map((index) => data.xValues[index] ?? 0),
+    });
+  }, [frame, size, hoverIndex, cursors, palette, data]);
 
   /** The sample nearest the pointer, or null on an empty plot. */
   const indexAt = (event: ReactPointerEvent<HTMLCanvasElement>) =>

@@ -49,7 +49,7 @@ export type PlotData = {
 /** What the pointer adds to a plot: the hovered sample and up to two cursors. */
 type PlotPointer = {
   hoverIndex: number | null;
-  /** Sample indices of cursors A and B, in the order they were placed. */
+  /** The x values of cursors A and B, in the order they were placed. */
   cursors: readonly number[];
 };
 
@@ -357,11 +357,11 @@ export function drawPlot(
     return;
   }
 
-  pointer.cursors.forEach((index, order) =>
+  pointer.cursors.forEach((x, order) =>
     drawVerticalLine(
       context,
       frame,
-      frame.xPixel(data.xValues[index] ?? 0),
+      frame.xPixel(x),
       ink,
       CURSOR_NAMES[order] ?? "",
       [],

@@ -12,7 +12,14 @@ import {
 import { Slider } from "@lunar-spice/components/ui/slider";
 import { Switch } from "@lunar-spice/components/ui/switch";
 import { formatSi } from "@lunar-spice/simulator/units";
-import { useEffect, useId, useRef, useState } from "react";
+import { cn } from "@lunar-spice/utils/cn";
+import {
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 
 import { useCanvasPalette } from "../../hooks/use-canvas-palette";
 import {
@@ -26,7 +33,13 @@ import {
   triggerLevelOf,
   triggerRangeOf,
 } from "../../lib/scope";
-import { drawPlot, type PlotData, PlotFrame } from "./plot-canvas";
+import { traceSwatch } from "../../lib/trace-colors";
+import {
+  CURSOR_NAMES,
+  drawPlot,
+  type PlotData,
+  PlotFrame,
+} from "./plot-canvas";
 
 /** How each strip names, colors and labels its quantity. */
 const QUANTITIES = {
@@ -89,15 +102,48 @@ function ScaleSelect({
   );
 }
 
-/** One live strip: voltage or current over the scope's recent samples. */
+/**
+ * Where the pointer and cursors sit on a scope, as fractions across its time window, so
+ * they hold still while the trace scrolls. Both strips share one, so the crosshair and
+ * cursors line up in time.
+ */
+type ScopePointer = {
+  hover: number | null;
+  cursors: readonly number[];
+};
+
+/** The sample nearest `fraction` across `frame`, or null on an empty trace. */
+function sampleAt(frame: PlotFrame, fraction: number) {
+  return frame.data.xValues.length === 0
+    ? null
+    : frame.nearestIndex(frame.left + fraction * frame.width);
+}
+
+/** The x value `fraction` across `frame`'s x range. */
+function xAt(frame: PlotFrame, fraction: number) {
+  return frame.x.min + fraction * (frame.x.max - frame.x.min);
+}
+
+/**
+ * One live strip: voltage or current over the scope's recent samples, with the shared
+ * crosshair and cursors.
+ */
 function ScopeStrip({
   scope,
   quantity,
+  pointer,
+  onHover,
+  onPlace,
 }: {
   scope: Scope;
   quantity: ScopeQuantity;
+  /** Read on every frame, since the pointer moves without a render. */
+  pointer: { readonly current: ScopePointer };
+  onHover: (fraction: number | null) => void;
+  onPlace: (fraction: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const frameRef = useRef<PlotFrame | null>(null);
   const palette = useCanvasPalette();
 
   useEffect(() => {
@@ -120,13 +166,18 @@ function ScopeStrip({
       const height = Math.round(rect.height * ratio);
       const isResized = canvas.width !== width || canvas.height !== height;
 
-      // The settings change in place too, so they count as new content.
+      // The settings change in place too, so they count as new content, as does the
+      // pointer.
+      const { hover, cursors } = pointer.current;
+
       const state = [
         scope.count,
         scope.timeSpan,
         scope.voltageScale,
         scope.isTriggered,
         scope.triggerLevel,
+        hover,
+        ...cursors,
       ].join(" ");
 
       if (isResized || state !== drawnState) {
@@ -153,11 +204,13 @@ function ScopeStrip({
           data.levels = [{ y: level, label: "T" }];
         }
 
-        drawPlot(
-          context,
-          palette,
-          new PlotFrame(data, rect.width, rect.height),
-        );
+        const plotFrame = new PlotFrame(data, rect.width, rect.height);
+
+        drawPlot(context, palette, plotFrame, {
+          hoverIndex: hover === null ? null : sampleAt(plotFrame, hover),
+          cursors: cursors.map((fraction) => xAt(plotFrame, fraction)),
+        });
+        frameRef.current = plotFrame;
         drawnState = state;
       }
 
@@ -167,19 +220,43 @@ function ScopeStrip({
     frame = requestAnimationFrame(draw);
 
     return () => cancelAnimationFrame(frame);
-  }, [scope, quantity, palette]);
+  }, [scope, quantity, palette, pointer]);
+
+  /** How far across the time window the pointer is, or null outside it. */
+  const fractionAt = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const plotFrame = frameRef.current;
+
+    if (!plotFrame) {
+      return null;
+    }
+
+    const x = event.clientX - event.currentTarget.getBoundingClientRect().left;
+
+    const fraction = (x - plotFrame.left) / plotFrame.width;
+
+    return fraction >= 0 && fraction <= 1 ? fraction : null;
+  };
 
   return (
     <canvas
       ref={canvasRef}
       aria-hidden="true"
       className="min-h-0 w-full flex-1"
+      onPointerMove={(event) => onHover(fractionAt(event))}
+      onPointerLeave={() => onHover(null)}
+      onPointerDown={(event) => {
+        const fraction = fractionAt(event);
+
+        if (fraction !== null && event.button === 0) {
+          onPlace(fraction);
+        }
+      }}
     />
   );
 }
 
-/** How often the trigger row reads the level and range the simulation moves, in ms. */
-const TRIGGER_POLL_MS = 200;
+/** How often the rows below a scope read what the simulation moves, in ms. */
+const POLL_MS = 200;
 
 /** Steps across the trigger slider, from the lowest level to the highest. */
 const TRIGGER_STEPS = 100;
@@ -217,7 +294,7 @@ function TriggerRow({
 
     read();
 
-    const timer = setInterval(read, TRIGGER_POLL_MS);
+    const timer = setInterval(read, POLL_MS);
 
     return () => clearInterval(timer);
   }, [scope, scope.triggerLevel, scope.voltageScale, scope.timeSpan]);
@@ -264,6 +341,237 @@ function TriggerRow({
   );
 }
 
+/** The value of `quantity` at `time`, or null where the trace has no sample yet. */
+function valueAt(scope: Scope, quantity: ScopeQuantity, time: number) {
+  const { values, times } = orderedSamples(scope, quantity);
+  const first = times[0];
+  const last = times.at(-1);
+
+  if (
+    first === undefined ||
+    last === undefined ||
+    time < first ||
+    time > last
+  ) {
+    return null;
+  }
+
+  let nearest = 0;
+
+  for (let index = 1; index < times.length; index += 1) {
+    if (
+      Math.abs((times[index] ?? 0) - time) <
+      Math.abs((times[nearest] ?? 0) - time)
+    ) {
+      nearest = index;
+    }
+  }
+
+  return values[nearest] ?? null;
+}
+
+/**
+ * Times at the cursors, and the voltage and current there; with two cursors, the change
+ * from A to B in each and the frequency whose period is that time. The values follow
+ * the trace, so they are read on a timer.
+ */
+function ScopeCursorReadout({
+  scope,
+  cursors,
+  onClear,
+}: {
+  scope: Scope;
+  cursors: readonly number[];
+  onClear: () => void;
+}) {
+  // Readings belong to the cursors they were taken at, so a new cursor never shows
+  // the last one's.
+  const [reading, setReading] = useState<{
+    cursors: readonly number[];
+    times: readonly string[];
+    values: readonly string[];
+  } | null>(null);
+
+  const [a, b] = cursors;
+
+  useEffect(() => {
+    if (a === undefined) {
+      return;
+    }
+
+    const read = () => {
+      const { min, max } = orderedSamples(scope, "voltage").timeRange;
+      const timeOf = (fraction: number) => min + fraction * (max - min);
+
+      const format = (quantity: ScopeQuantity) => {
+        const { unit } = QUANTITIES[quantity];
+        const atA = valueAt(scope, quantity, timeOf(a));
+
+        if (b === undefined) {
+          return atA === null ? "–" : formatSi(atA, unit, 4);
+        }
+
+        const atB = valueAt(scope, quantity, timeOf(b));
+
+        return atA === null || atB === null
+          ? "Δ –"
+          : `Δ ${formatSi(atB - atA, unit, 4)}`;
+      };
+
+      // The window starts at the trigger once one is found, so times come from it.
+      const times = cursors.map((fraction) =>
+        formatSi(timeOf(fraction), "s", 4),
+      );
+
+      const values = [format("voltage"), format("current")];
+
+      setReading((current) =>
+        current?.cursors === cursors &&
+        current.times.join() === times.join() &&
+        current.values.join() === values.join()
+          ? current
+          : { cursors, times, values },
+      );
+    };
+
+    read();
+
+    const timer = setInterval(read, POLL_MS);
+
+    return () => clearInterval(timer);
+  }, [scope, cursors, a, b]);
+
+  if (a === undefined) {
+    return null;
+  }
+
+  const delta = b === undefined ? 0 : Math.abs(b - a) * scope.timeSpan;
+  const isCurrent = reading?.cursors === cursors;
+  const times = isCurrent ? reading.times : [];
+  const values = isCurrent ? reading.values : [];
+
+  return (
+    <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums">
+      {cursors.map((_, order) => (
+        <span key={CURSOR_NAMES[order]}>
+          {CURSOR_NAMES[order]} {times[order] ?? "–"}
+        </span>
+      ))}
+      {b !== undefined && (
+        <span>
+          Δ {formatSi(delta, "s", 4)}
+          {delta > 0 && ` · ${formatSi(1 / delta, "Hz", 4)}`}
+        </span>
+      )}
+      {(["voltage", "current"] as const).map((quantity, index) => (
+        <span key={quantity} className="flex items-center gap-1.5">
+          <span
+            className={cn(
+              "size-2 rounded-xs",
+              traceSwatch(QUANTITIES[quantity].colorIndex),
+            )}
+          />
+          {values[index] ?? "–"}
+        </span>
+      ))}
+      <Button variant="ghost" size="xs" onClick={onClear}>
+        Clear cursors
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * One scope's card: its controls, both strips and the cursor readout. Hovering a strip
+ * shows a crosshair on both; clicks place cursor A, then B, and a third click starts
+ * over at A.
+ */
+function ScopeCard({
+  scope,
+  onRemove,
+  onSettingsChange,
+}: {
+  scope: Scope;
+  onRemove: () => void;
+  onSettingsChange: (settings: Partial<ScopeSettings>) => void;
+}) {
+  const [cursors, setCursors] = useState<readonly number[]>([]);
+  const pointer = useRef<ScopePointer>({ hover: null, cursors: [] });
+
+  const placeCursors = (next: readonly number[]) => {
+    pointer.current = { ...pointer.current, cursors: next };
+    setCursors(next);
+  };
+
+  const strip = (quantity: ScopeQuantity) => (
+    <ScopeStrip
+      scope={scope}
+      quantity={quantity}
+      pointer={pointer}
+      onHover={(hover) => {
+        pointer.current = { ...pointer.current, hover };
+      }}
+      onPlace={(fraction) =>
+        placeCursors(
+          cursors.length < CURSOR_NAMES.length
+            ? [...cursors, fraction]
+            : [fraction],
+        )
+      }
+    />
+  );
+
+  return (
+    <section
+      aria-label={scope.title}
+      className="bg-card flex h-full w-96 shrink-0 flex-col gap-1 rounded-lg border p-2"
+    >
+      <header className="flex items-center gap-1">
+        <h3 className="mr-auto min-w-0 truncate text-xs font-medium">
+          {scope.title}
+        </h3>
+        <ScaleSelect
+          label="Time span"
+          value={String(scope.timeSpan)}
+          options={TIME_SPAN_LABELS}
+          onChange={(value) => onSettingsChange({ timeSpan: Number(value) })}
+        />
+        <ScaleSelect
+          label="Voltage scale"
+          value={
+            scope.voltageScale === null
+              ? AUTO_SCALE
+              : String(scope.voltageScale)
+          }
+          options={VOLTAGE_SCALE_LABELS}
+          onChange={(value) =>
+            onSettingsChange({
+              voltageScale: value === AUTO_SCALE ? null : Number(value),
+            })
+          }
+        />
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="relative after:absolute after:-inset-x-px after:-inset-y-1.75"
+          aria-label={`Remove ${scope.title} scope`}
+          onClick={onRemove}
+        >
+          <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+        </Button>
+      </header>
+      <TriggerRow scope={scope} onChange={onSettingsChange} />
+      {strip("voltage")}
+      {strip("current")}
+      <ScopeCursorReadout
+        scope={scope}
+        cursors={cursors}
+        onClear={() => placeCursors([])}
+      />
+    </section>
+  );
+}
+
 /**
  * Falstad-style scopes: each watched element's voltage and current, scrolling as the
  * interactive simulation runs. Voltage and current get separate strips, never one
@@ -293,54 +601,14 @@ export function ScopeView({
   return (
     <div className="flex h-full min-h-0 gap-3 overflow-x-auto p-3">
       {scopes.map((scope) => (
-        <section
+        <ScopeCard
           key={scope.elementId}
-          aria-label={scope.title}
-          className="bg-card flex h-full w-96 shrink-0 flex-col gap-1 rounded-lg border p-2"
-        >
-          <header className="flex items-center gap-1">
-            <h3 className="mr-auto min-w-0 truncate text-xs font-medium">
-              {scope.title}
-            </h3>
-            <ScaleSelect
-              label="Time span"
-              value={String(scope.timeSpan)}
-              options={TIME_SPAN_LABELS}
-              onChange={(value) =>
-                onSettingsChange(scope.elementId, { timeSpan: Number(value) })
-              }
-            />
-            <ScaleSelect
-              label="Voltage scale"
-              value={
-                scope.voltageScale === null
-                  ? AUTO_SCALE
-                  : String(scope.voltageScale)
-              }
-              options={VOLTAGE_SCALE_LABELS}
-              onChange={(value) =>
-                onSettingsChange(scope.elementId, {
-                  voltageScale: value === AUTO_SCALE ? null : Number(value),
-                })
-              }
-            />
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="relative after:absolute after:-inset-x-px after:-inset-y-1.75"
-              aria-label={`Remove ${scope.title} scope`}
-              onClick={() => onRemove(scope.elementId)}
-            >
-              <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
-            </Button>
-          </header>
-          <TriggerRow
-            scope={scope}
-            onChange={(settings) => onSettingsChange(scope.elementId, settings)}
-          />
-          <ScopeStrip scope={scope} quantity="voltage" />
-          <ScopeStrip scope={scope} quantity="current" />
-        </section>
+          scope={scope}
+          onRemove={() => onRemove(scope.elementId)}
+          onSettingsChange={(settings) =>
+            onSettingsChange(scope.elementId, settings)
+          }
+        />
       ))}
     </div>
   );
