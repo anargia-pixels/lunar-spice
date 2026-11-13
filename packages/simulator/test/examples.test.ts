@@ -6,7 +6,7 @@ import { EXAMPLES } from "../src/examples";
 import { pointKey } from "../src/geometry";
 import { flipElements, rotateElements } from "../src/layout";
 import { Simulation } from "../src/simulation";
-import { joinPostsToWires } from "../src/wiring";
+import { joinPostsToWires, mergeWires } from "../src/wiring";
 
 describe("examples", () => {
   for (const example of EXAMPLES) {
@@ -136,6 +136,55 @@ describe("joining posts to wires", () => {
     ).elements;
 
     expect(joinPostsToWires(elements)).toBe(elements);
+  });
+});
+
+describe("merging wires", () => {
+  /** The wires left once the editor tidies `lines`, as file lines. */
+  function tidied(...lines: string[]) {
+    const elements = Circuit.parse(lines.join("\n")).elements;
+
+    return joinPostsToWires(mergeWires(elements))
+      .filter((element) => element.isConductor())
+      .map((wire) => wire.dump());
+  }
+
+  test("a wire drawn over a longer one disappears into it", () => {
+    expect(tidied("w 0 0 0 128 0", "w 0 32 0 96 0")).toEqual(["w 0 0 0 128 0"]);
+  });
+
+  test("wires meeting in line with nothing else there become one", () => {
+    expect(tidied("w 0 0 64 0 0", "w 128 0 64 0 0", "w 128 0 192 0 0")).toEqual(
+      ["w 0 0 192 0 0"],
+    );
+  });
+
+  test("overlapping wires combine, then split where a post lands", () => {
+    expect(
+      tidied("w 0 0 96 0 0", "w 32 0 128 0 0", "r 64 0 64 64 0 1000"),
+    ).toEqual(["w 0 0 64 0 0", "w 64 0 128 0 0"]);
+  });
+
+  test("wires meeting at another post stay apart", () => {
+    const elements = Circuit.parse(
+      ["w 0 0 64 0 0", "w 64 0 128 0 0", "w 64 0 64 64 0"].join("\n"),
+    ).elements;
+
+    expect(mergeWires(elements)).toBe(elements);
+  });
+
+  test("wires on parallel lines or a gap apart stay apart", () => {
+    const elements = Circuit.parse(
+      ["w 0 0 64 0 0", "w 0 16 64 16 0", "w 80 0 128 0 0"].join("\n"),
+    ).elements;
+
+    expect(mergeWires(elements)).toBe(elements);
+  });
+
+  test("a diagonal wire merges with one in line with it", () => {
+    expect(tidied("w 0 0 32 32 0", "w 32 32 64 64 0")).toEqual([
+      "w 0 0 64 64 0",
+    ]);
   });
 });
 

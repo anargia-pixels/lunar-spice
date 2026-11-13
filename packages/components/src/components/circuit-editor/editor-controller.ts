@@ -26,7 +26,11 @@ import {
   isInside,
   rotateElements,
 } from "@lunar-spice/simulator/layout";
-import { isOnWire, joinPostsToWires } from "@lunar-spice/simulator/wiring";
+import {
+  isOnWire,
+  joinPostsToWires,
+  mergeWires,
+} from "@lunar-spice/simulator/wiring";
 
 import { canvasPalette, watchPalette } from "../../lib/canvas-palette";
 import type { Scope, ScopeSettings } from "../../lib/scope";
@@ -349,15 +353,29 @@ export class EditorController {
     }
   }
 
-  /** Joins posts that touch a wire between its ends; true when that cut any wire. */
+  /**
+   * Merges overlapping wires, and wires meeting in line with nothing else at the joint,
+   * then joins posts that touch a wire between its ends; true when any wire changed.
+   */
   private joinWires() {
-    const joined = joinPostsToWires(this.circuit.elements);
+    const joined = joinPostsToWires(mergeWires(this.circuit.elements));
 
     if (joined === this.circuit.elements) {
       return false;
     }
 
     this.circuit.elements = [...joined];
+
+    // A wire merged into another leaves the selection.
+    const kept = new Set(joined);
+
+    this.selection = new Set(
+      [...this.selection].filter((element) => kept.has(element)),
+    );
+
+    if (this.hovered && !kept.has(this.hovered)) {
+      this.hovered = null;
+    }
 
     return true;
   }
