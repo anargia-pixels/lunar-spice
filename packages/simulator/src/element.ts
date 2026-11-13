@@ -292,8 +292,17 @@ export abstract class CircuitElement {
   }
 
   /**
+   * The point where a probe reads the net beneath it, like a voltage probe's tip; null
+   * for the rest. It is no post: wiring never joins, cuts or drags it, and it takes the
+   * node of a post there or of a wire running through it.
+   */
+  probePoint(): Point | null {
+    return null;
+  }
+
+  /**
    * True for a voltmeter or voltage probe, whose reading results list beside the nets:
-   * its first post against its second, or against ground when it has one post.
+   * a voltmeter's first post against its second, a probe's tip against ground.
    */
   isMeter() {
     return false;

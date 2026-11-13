@@ -1,6 +1,7 @@
 import type { CircuitElement } from "./element";
 import { pointKey } from "./geometry";
 import type { AnalysisMode } from "./mna-system";
+import { wireThrough } from "./wiring";
 
 /** Stands for the ground node in the union-find before nodes are numbered. */
 const GROUND_KEY = "ground";
@@ -80,15 +81,18 @@ function fallbackReference(elements: readonly CircuitElement[]) {
   const source = elements.find((element) => element.isSource());
 
   const reference =
-    source ?? elements.find((element) => !element.isConductor());
+    source ??
+    elements.find(
+      (element) => !element.isConductor() && element.posts().length > 0,
+    );
 
   return reference?.posts()[0];
 }
 
 /**
  * Builds the netlist for `mode`. Posts join when they share a point, a conductor, a
- * ground symbol or a net label name. It assigns `nodes`, `volts` and `firstBranch` on
- * every element.
+ * ground symbol or a net label name; probes read the net beneath them. It assigns
+ * `nodes`, `volts` and `firstBranch` on every element.
  */
 export function buildNetlist(
   elements: readonly CircuitElement[],
@@ -162,6 +166,25 @@ export function buildNetlist(
 
       return node;
     });
+  }
+
+  // A probe takes the node beneath its point: a post's there, else a wire's through it.
+  // Over nothing, it has no node.
+  for (const element of elements) {
+    const point = element.probePoint();
+
+    if (!point) {
+      continue;
+    }
+
+    const atPost = nodeOfPoint.get(pointKey(point));
+
+    const wire =
+      atPost === undefined ? wireThrough(elements, point) : undefined;
+
+    const node = atPost ?? (wire && nodeOfPoint.get(pointKey(wire.start)));
+
+    element.nodes = node === undefined ? [] : [node];
   }
 
   // Name each node; a net label renames its node unless the node is ground.

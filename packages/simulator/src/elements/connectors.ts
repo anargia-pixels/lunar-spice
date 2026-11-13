@@ -385,10 +385,11 @@ function formatReading(value: number | null | undefined, unit: string) {
 }
 
 /**
- * A voltage probe, as in Multisim: one post, read against ground. Beside the voltage
- * it reads the signal's peak-to-peak, RMS, DC and frequency during the interactive
- * simulation. It is Falstad's output element, so Falstad opens it too. It draws no
- * current.
+ * A voltage probe, as in Multisim: its tip reads the net beneath it against ground.
+ * The tip is no post, so placing or moving the probe never changes the wiring; it reads
+ * whichever wire or post it rests on. Beside the voltage it reads the signal's
+ * peak-to-peak, RMS, DC and frequency during the interactive simulation. It is
+ * Falstad's output element, so Falstad opens it too. It draws no current.
  */
 export class VoltageProbe extends CircuitElement {
   readonly kind = "voltage-probe";
@@ -418,14 +419,23 @@ export class VoltageProbe extends CircuitElement {
   }
 
   override posts(): Point[] {
-    return [this.start];
+    return [];
+  }
+
+  override probePoint() {
+    return this.start;
   }
 
   override isMeter() {
     return true;
   }
 
-  /** Its post's voltage to ground. */
+  /** True while its tip rests on a net, so it has a node to read. */
+  get isConnected() {
+    return this.nodes.length > 0;
+  }
+
+  /** Its tip's voltage to ground. */
   get voltage() {
     return this.volts[0] ?? 0;
   }
@@ -435,7 +445,7 @@ export class VoltageProbe extends CircuitElement {
     const reading = this.meter.reading;
 
     return [
-      `V: ${formatSi(this.voltage, "V", 4)}`,
+      `V: ${formatReading(this.isConnected ? this.voltage : null, "V")}`,
       `V(p-p): ${formatReading(reading?.peakToPeak, "V")}`,
       `V(rms): ${formatReading(reading?.rms, "V")}`,
       `V(dc): ${formatReading(reading?.dc, "V")}`,
@@ -452,13 +462,24 @@ export class VoltageProbe extends CircuitElement {
   }
 
   override finishStep(system: MnaSystem) {
-    if (system.mode === "transient") {
+    if (system.mode === "transient" && this.isConnected) {
       this.meter.add(this.voltage, system.timeStep);
     }
   }
 
   override reset() {
     super.reset();
+    this.meter.reset();
+  }
+
+  /** A moved probe reads another place, so its measurements start over. */
+  override translate(dx: number, dy: number) {
+    super.translate(dx, dy);
+    this.meter.reset();
+  }
+
+  override transform(map: (point: Point) => Point) {
+    super.transform(map);
     this.meter.reset();
   }
 

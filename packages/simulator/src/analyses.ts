@@ -146,7 +146,8 @@ function voltageChannels(simulation: Simulation, circuit: Circuit) {
       nodes: [info.node, 0] as const,
     })),
     ...circuit.elements
-      .filter((element) => element.isMeter())
+      // A voltage probe over no net has no node, so nothing to read.
+      .filter((element) => element.isMeter() && element.nodes.length > 0)
       .map((meter) => ({
         name: voltageName(meter.designator),
         net: null,

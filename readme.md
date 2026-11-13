@@ -28,9 +28,10 @@ probe (to ground, with V(p-p), V(rms), V(dc) and frequency, as in Multisim) · n
 ground.
 
 Parts have a fixed size, as in Multisim: a click places one, and `[` `]`, H and V turn or
-mirror it before you click. Only wires stretch. The interactive simulation runs in real
-time by default; the speed slider steps from 1/1000× to 1000×, and microphones and
-speakers work at 1×.
+mirror it before you click. Only wires stretch. A voltage probe rests on any wire or post
+and reads that net without changing the wiring, so it can be moved freely. The interactive
+simulation runs in real time by default; the speed slider steps from 1/1000× to 1000×, and
+microphones and speakers work at 1×.
 
 Wires route as in Multisim and EasyEDA: click to start one, click again for each corner,
 and it ends on the pin or wire you click, on a double-click, or with a right-click or

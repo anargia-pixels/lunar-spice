@@ -5,6 +5,7 @@ import { Circuit } from "../src/circuit";
 import { VoltageProbe } from "../src/elements/connectors";
 import { SignalMeter } from "../src/signal-meter";
 import { Simulation } from "../src/simulation";
+import { joinPostsToWires, mergeWires } from "../src/wiring";
 
 /** Feeds `meter` `seconds` of `signal`, sampled every `timeStep`. */
 function feed(
@@ -86,7 +87,7 @@ describe("voltage probe", () => {
     expect(probe?.dump()).toBe("O 0 0 16 -16 0 0");
   });
 
-  test("reads its post against ground in results", () => {
+  test("reads its tip against ground in results", () => {
     const text = [
       "R 0 0 0 -32 0 0 40 5 0 0 0.5 0",
       "r 0 0 64 0 0 1000",
@@ -124,6 +125,88 @@ describe("voltage probe", () => {
     expect(lines[4]).toBe("Freq: 1 kHz");
 
     circuit.reset();
+
+    expect(probe?.meter.reading).toBeNull();
+  });
+
+  /**
+   * A 5 V rail into a 1 kΩ / 1 kΩ divider whose middle is one wire from (64, 0) to
+   * (64, 64), between the two resistors. `probe` is the probe's line.
+   */
+  function dividerWith(probe: string) {
+    return [
+      "R 0 0 0 -32 0 0 40 5 0 0 0.5 0",
+      "r 0 0 64 0 0 1000",
+      "w 64 0 64 64 0",
+      "r 64 64 64 128 0 1000",
+      "g 64 128 64 144 0 0",
+      probe,
+    ].join("\n");
+  }
+
+  test("reads a wire it rests on between the wire's ends", () => {
+    const nets = new Map(
+      operatingPoint(dividerWith("O 64 32 80 16 0 0")).nets.map(
+        ({ name, voltage }) => [name, voltage],
+      ),
+    );
+
+    expect(nets.get("V(PR1)") ?? 0).toBeCloseTo(2.5, 6);
+  });
+
+  test("never cuts or joins the wiring", () => {
+    const { elements } = Circuit.parse(dividerWith("O 64 32 80 16 0 0"));
+
+    expect(mergeWires(elements)).toBe(elements);
+    expect(joinPostsToWires(elements)).toBe(elements);
+  });
+
+  test("adds no net of its own", () => {
+    const bare = new Simulation(
+      Circuit.parse(dividerWith("")).elements,
+      "dc",
+      1e-6,
+    );
+
+    for (const probe of ["O 64 32 80 16 0 0", "O 200 200 216 184 0 0"]) {
+      const { netlist } = new Simulation(
+        Circuit.parse(dividerWith(probe)).elements,
+        "dc",
+        1e-6,
+      );
+
+      expect(netlist.nodes.map(({ name }) => name)).toEqual(
+        bare.netlist.nodes.map(({ name }) => name),
+      );
+    }
+  });
+
+  test("over no net it reads nothing and is left out of results", () => {
+    const text = dividerWith("O 200 200 216 184 0 0");
+    const circuit = Circuit.parse(text);
+    const probe = circuit.elements.find((e) => e instanceof VoltageProbe);
+
+    new Simulation(circuit.elements, "dc", 1e-6).solveOperatingPoint();
+
+    expect(probe?.isConnected).toBe(false);
+    expect(probe?.readings()[0]).toBe("V: –");
+    expect(
+      operatingPoint(text).nets.some(({ name }) => name === "V(PR1)"),
+    ).toBe(false);
+  });
+
+  test("starts its measurements over when moved", () => {
+    const circuit = Circuit.parse(RAIL_CIRCUIT);
+    const simulation = new Simulation(circuit.elements, "transient", 1e-6);
+    const probe = circuit.elements.find((e) => e instanceof VoltageProbe);
+
+    for (let step = 0; step < 100; step += 1) {
+      simulation.step();
+    }
+
+    expect(probe?.meter.reading).not.toBeNull();
+
+    probe?.translate(16, 0);
 
     expect(probe?.meter.reading).toBeNull();
   });

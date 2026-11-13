@@ -27,11 +27,16 @@ function positionOn(wire: CircuitElement, point: Point) {
   return along > 0 && along < 1 ? along : null;
 }
 
-/** True when `point` is on a wire between its ends, where a new wire's end would join. */
-export function isOnWire(elements: readonly CircuitElement[], point: Point) {
-  return elements.some(
+/** Returns the wire that runs through `point` between its ends, if any. */
+export function wireThrough(elements: readonly CircuitElement[], point: Point) {
+  return elements.find(
     (element) => isWire(element) && positionOn(element, point) !== null,
   );
+}
+
+/** True when `point` is on a wire between its ends, where a new wire's end would join. */
+export function isOnWire(elements: readonly CircuitElement[], point: Point) {
+  return wireThrough(elements, point) !== undefined;
 }
 
 /**
