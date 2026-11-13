@@ -39,6 +39,8 @@ export type DisplayOptions = {
   showCurrentDots: boolean;
   /** Designators and values beside each part. */
   showValues: boolean;
+  /** Each net's name, such as `n12`, as analysis results call it. */
+  showNetNames: boolean;
   showGrid: boolean;
   /** A dot at each grid point, or lines along the grid. */
   gridStyle: GridStyle;
@@ -51,6 +53,7 @@ export const DEFAULT_DISPLAY: DisplayOptions = {
   showVoltageColors: true,
   showCurrentDots: true,
   showValues: true,
+  showNetNames: false,
   showGrid: true,
   gridStyle: "dots",
   resistorStyle: "us",

@@ -30,8 +30,15 @@ export type Scene = {
   posts: readonly PostPoint[];
   /** The elements of the net under the pointer, banded underneath. */
   hoveredNet: readonly CircuitElement[];
-  /** Operating-point voltage tags, each at its net's busiest junction. */
-  voltageTags: readonly { point: Point; voltage: number }[];
+  /**
+   * Tags at each net's busiest junction: its name when net names show, and its
+   * operating-point voltage once there is one.
+   */
+  netTags: readonly {
+    point: Point;
+    name: string | null;
+    voltage: number | null;
+  }[];
   showGrid: boolean;
   gridStyle: GridStyle;
   voltageAt: (point: Point) => number;
@@ -94,8 +101,10 @@ export function renderScene(
     painter.post(point, scene.voltageAt(point), count);
   }
 
-  for (const { point, voltage } of scene.voltageTags) {
-    painter.voltageTag(point, formatSi(voltage, "V", 3));
+  for (const { point, name, voltage } of scene.netTags) {
+    const parts = [name, voltage === null ? null : formatSi(voltage, "V", 3)];
+
+    painter.netTag(point, parts.filter(Boolean).join("  "));
   }
 
   // Overlays: stretch handles, ghost and rubber band

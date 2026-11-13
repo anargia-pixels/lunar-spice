@@ -225,11 +225,12 @@ export class InteractiveRun {
     return this.simulation?.netlist.nodes[node]?.name ?? `n${node}`;
   }
 
-  /** The name of the net at a post's point; null for points not in the netlist. */
-  netNameAt(point: Point) {
-    const node = this.simulation?.netlist.nodeOfPoint.get(pointKey(point));
+  /** The net at a post's point, as results name it; null for points not in the netlist. */
+  netAt(point: Point) {
+    const netlist = this.simulation?.netlist;
+    const node = netlist?.nodeOfPoint.get(pointKey(point));
 
-    return node === undefined ? null : this.netName(node);
+    return node === undefined ? null : (netlist?.nodes[node] ?? null);
   }
 
   /**

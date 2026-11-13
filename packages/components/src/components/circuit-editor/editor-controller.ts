@@ -1545,28 +1545,43 @@ export class EditorController {
     return this.isConnection(at) ? at : null;
   }
 
-  /** Each net's operating-point voltage, tagged at its busiest junction. */
-  private voltageTags() {
+  /**
+   * Tags each net at its busiest junction with its name, when net names show, and its
+   * operating-point voltage, once there is one. Ground goes untagged, and a net label
+   * already shows its net's name.
+   */
+  private netTags() {
     const { netVoltages } = this;
-    const anchors = new Map<string, PostPoint>();
+    const { showNetNames } = this.display;
+    const anchors = new Map<string, { post: PostPoint; isLabeled: boolean }>();
 
-    if (!netVoltages) {
+    if (!netVoltages && !showNetNames) {
       return [];
     }
 
     for (const post of this.posts) {
-      const name = this.run.netNameAt(post.point);
-      const best = name === null ? undefined : anchors.get(name);
+      const net = this.run.netAt(post.point);
 
-      if (name !== null && name !== "0" && (!best || post.count > best.count)) {
-        anchors.set(name, post);
+      if (!net || net.name === "0") {
+        continue;
+      }
+
+      const best = anchors.get(net.name);
+
+      if (!best || post.count > best.post.count) {
+        anchors.set(net.name, { post, isLabeled: net.isLabeled });
       }
     }
 
-    return [...anchors].flatMap(([name, { point }]) => {
-      const voltage = netVoltages.get(name);
+    return [...anchors].flatMap(([name, { post, isLabeled }]) => {
+      const voltage = netVoltages?.get(name) ?? null;
+      const isNamed = showNetNames && !isLabeled;
 
-      return voltage === undefined ? [] : [{ point, voltage }];
+      if (!isNamed && voltage === null) {
+        return [];
+      }
+
+      return [{ point: post.point, name: isNamed ? name : null, voltage }];
     });
   }
 
@@ -1611,7 +1626,7 @@ export class EditorController {
           : this.circuit.elements.filter(
               (element) => this.netOf(element) === hoveredNet,
             ),
-      voltageTags: this.voltageTags(),
+      netTags: this.netTags(),
       showGrid: this.display.showGrid,
       gridStyle: this.display.gridStyle,
       voltageAt: (point) => this.run.voltageAt(point),

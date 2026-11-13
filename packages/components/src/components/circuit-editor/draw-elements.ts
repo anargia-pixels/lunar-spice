@@ -42,7 +42,10 @@ import type { DisplayOptions } from "./display-options";
  * How the schematic is drawn: the appearance settings, the theme's palette and the
  * circuit's voltage range.
  */
-export type DrawOptions = Omit<DisplayOptions, "showGrid" | "gridStyle"> & {
+export type DrawOptions = Omit<
+  DisplayOptions,
+  "showGrid" | "gridStyle" | "showNetNames"
+> & {
   palette: CanvasPalette;
   /** Voltage drawn at full color. */
   voltageRange: number;
@@ -1474,8 +1477,8 @@ export class SchematicPainter {
     context.restore();
   }
 
-  /** A net's operating-point voltage in a small tag up and right of `at`. */
-  voltageTag(at: Point, content: string) {
+  /** A net's name or operating-point voltage in a small tag up and right of `at`. */
+  netTag(at: Point, content: string) {
     const { context } = this;
     const size = 10;
 

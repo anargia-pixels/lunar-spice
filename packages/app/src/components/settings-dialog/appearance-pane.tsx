@@ -168,6 +168,7 @@ const DISPLAY_SWITCHES = [
   { key: "showVoltageColors", label: "Color wires by voltage" },
   { key: "showCurrentDots", label: "Show current as moving dots" },
   { key: "showValues", label: "Show designators and values" },
+  { key: "showNetNames", label: "Show net names" },
   { key: "showGrid", label: "Show grid" },
 ] as const;
 
