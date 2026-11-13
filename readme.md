@@ -34,14 +34,16 @@ speakers work at 1×.
 Wires route as in Multisim and EasyEDA: click to start one, click again for each corner,
 and it ends on the pin or wire you click, on a double-click, or with a right-click or
 Escape. With the select tool, a click on a pin starts a wire from it. A wire or pin that
-lands on the middle of another wire joins it; wires that only cross stay apart. Ends that
-join nothing are ringed and counted under the canvas. Moving a part keeps it connected:
-its wires stretch along, with a right-angle bend where they would run at a slant, and a
-part that touched it directly gets a new wire.
+lands on the middle of another wire joins it; wires that only cross stay apart. A wire
+drawn over another, or wires that meet in a straight line with nothing else at the joint,
+become one wire. Ends that join nothing are ringed and counted under the canvas. Moving a
+part keeps it connected: its wires stretch along, with a right-angle bend where they would
+run at a slant, and a part that touched it directly gets a new wire.
 
 Each part's name and value can be dragged to a clearer spot, and its name changed in its
 properties (`R1` can become `Rload`). Schematic text uses Poppins or JetBrains Mono, from
-View › Schematic font.
+View › Schematic font. The canvas grid shows dots or lines, chosen under Settings ›
+Appearances › Grid style.
 
 ## Files
 

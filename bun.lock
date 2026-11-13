@@ -16,7 +16,7 @@
     },
     "apps/desktop": {
       "name": "desktop",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "dependencies": {
         "@hugeicons/core-free-icons": "catalog:",
         "@hugeicons/react": "catalog:",
@@ -41,7 +41,7 @@
     },
     "apps/web": {
       "name": "web",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "dependencies": {
         "@hugeicons/core-free-icons": "catalog:",
         "@hugeicons/react": "catalog:",
