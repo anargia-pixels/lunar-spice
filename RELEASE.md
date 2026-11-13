@@ -31,9 +31,13 @@ The packaging tool requires three numbers, such as `0.1.0`. If the user requests
 with four numbers, agree on a supported version before changing it or publishing the
 release.
 
-Every tag `v0.1.x` builds the desktop app for Linux x86_64 and macOS Apple Silicon, and
-deploys that commit's web app to `lunarspice.doctorthe113.com`. There is no tag suffix and
-no other platform.
+Every tag `v0.1.x` deploys that commit's web app to `lunarspice.doctorthe113.com`. There
+is no tag suffix.
+
+The desktop app is not being developed right now, so the `build` job in the release
+workflow is commented out and releases publish no desktop packages. Still set the desktop
+version with the web one; the check job compares both with the tag. While the builds are
+paused, skip the steps below that wait for or check desktop assets.
 
 This step is complete when the selected version and the reason for the increase are clear.
 The examples below use `0.1.0`. Replace it with the selected version.
@@ -121,7 +125,10 @@ gh release view "$release_tag"
 
 Replace `RUN_ID` with the selected run ID. Confirm that the check job, both build jobs and
 the `deploy-web` job pass. The release appears after the first build finishes and gains
-each asset as its job finishes. Confirm that the release contains:
+each asset as its job finishes. While the desktop builds are paused, only the check and
+`deploy-web` jobs run and no release appears; create it with the notes instead:
+`gh release create "$release_tag" --verify-tag --title "$release_tag" --notes "<release notes>"`.
+Otherwise confirm that the release contains:
 
 - `lunar-spice-linux-x64.zip`
 - `lunar-spice-macos-arm64.dmg`
