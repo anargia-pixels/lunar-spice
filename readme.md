@@ -43,7 +43,8 @@ run at a slant, and a part that touched it directly gets a new wire.
 Each part's name and value can be dragged to a clearer spot, and its name changed in its
 properties (`R1` can become `Rload`). Schematic text uses Poppins or JetBrains Mono, from
 View › Schematic font. The canvas grid shows dots or lines, chosen under Settings ›
-Appearances › Grid style.
+Appearances › Grid style. Settings › Appearances › Show net names tags each net with the
+name results use, such as `n12`.
 
 ## Files
 
