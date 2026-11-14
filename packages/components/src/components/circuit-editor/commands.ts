@@ -86,6 +86,14 @@ const CANVAS_COMMANDS = [
     run: (editor) => editor.copySelection(),
   },
   {
+    id: "copy-png",
+    label: "Copy selection to PNG",
+    section: "Edit",
+    // Excalidraw's key for copying as PNG.
+    keys: [{ key: "c", alt: true, shift: true }],
+    run: (editor) => editor.copySelectionAsPng(),
+  },
+  {
     id: "paste",
     label: "Paste",
     section: "Edit",

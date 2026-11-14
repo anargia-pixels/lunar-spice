@@ -47,7 +47,9 @@ Each part's name and value can be dragged to a clearer spot, and its name change
 properties (`R1` can become `Rload`). Schematic text uses Poppins or JetBrains Mono, from
 View › Schematic font. The canvas grid shows dots or lines, chosen under Settings ›
 Appearances › Grid style. Settings › Appearances › Show net names tags each net with the
-name results use, such as `n12`; drag a tag to move it.
+name results use, such as `n12`; drag a tag to move it. Right-click a selection and choose
+Copy selection to PNG (`Alt+Shift+C`) to paste a picture of it into a document or chat, as
+in Excalidraw.
 
 ## Files
 

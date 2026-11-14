@@ -5,6 +5,7 @@ import {
   FlipHorizontalIcon,
   FlipVerticalIcon,
   HelpCircleIcon,
+  Image01Icon,
   MinusSignIcon,
   PencilEdit01Icon,
   PlusSignIcon,
@@ -378,6 +379,7 @@ export function CircuitEditor({
             title,
             description: "The clipboard is not available.",
           }),
+        onClipboardCopied: (title) => toast.add({ type: "success", title }),
       },
       latest.current.display,
     );
@@ -597,6 +599,16 @@ export function CircuitEditor({
                   {commandLabel("duplicate")}
                   <ContextMenuShortcut>
                     {commandText("duplicate")}
+                  </ContextMenuShortcut>
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem
+                  onClick={() => controller?.copySelectionAsPng()}
+                >
+                  <HugeiconsIcon icon={Image01Icon} strokeWidth={2} />
+                  {commandLabel("copy-png")}
+                  <ContextMenuShortcut>
+                    {commandText("copy-png")}
                   </ContextMenuShortcut>
                 </ContextMenuItem>
                 <ContextMenuSeparator />

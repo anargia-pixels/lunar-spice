@@ -47,6 +47,7 @@ import {
 } from "./editor-history";
 import { InteractiveRun } from "./interactive-run";
 import { type PostPoint, renderScene } from "./render-scene";
+import { selectionImage } from "./selection-image";
 import type { SimulationStatus } from "./simulation-status";
 import { findTool, SELECT_TOOL, type Tool, toolForKey } from "./tools";
 
@@ -72,6 +73,8 @@ export type EditorCallbacks = {
   onHelpRequest: () => void;
   /** Reports a failed clipboard read or write; `message` titles the error. */
   onClipboardError: (message: string) => void;
+  /** Reports a finished clipboard write the user cannot see; `message` titles it. */
+  onClipboardCopied: (message: string) => void;
 };
 
 /** Inkscape's zoom step for + and −. */
@@ -921,6 +924,32 @@ export class EditorController {
       navigator.clipboard
         .writeText(text)
         .catch(() => this.callbacks.onClipboardError("Unable to copy."));
+    }
+  }
+
+  /**
+   * Copies the selection to the clipboard as a PNG, as Excalidraw does, for pasting into
+   * documents and chats. The image is made while the clipboard waits for it, which keeps
+   * Safari's permission from the click.
+   */
+  copySelectionAsPng() {
+    const elements = this.selectedElements;
+    const keys = new Set(elements.flatMap((e) => e.posts().map(pointKey)));
+
+    const image = selectionImage(
+      this.drawOptions(),
+      elements,
+      this.posts.filter(({ point }) => keys.has(pointKey(point))),
+      (point) => this.run.voltageAt(point),
+    );
+
+    if (image) {
+      navigator.clipboard
+        .write([new ClipboardItem({ "image/png": image })])
+        .then(() =>
+          this.callbacks.onClipboardCopied("Copied to clipboard as PNG"),
+        )
+        .catch(() => this.callbacks.onClipboardError("Unable to copy as PNG."));
     }
   }
 
