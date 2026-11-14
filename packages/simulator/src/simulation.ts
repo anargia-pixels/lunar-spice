@@ -16,11 +16,22 @@ const NODE_GMIN = 1e-12;
  */
 const MAX_STEP_ITERATIONS = 20;
 
+/**
+ * Newton iterations allowed for a step that is part of a divided one. These steps already
+ * fall back on smaller ones, so a step that will not converge gives up sooner: a
+ * comparator snapping over fails each division until the steps are short enough.
+ */
+const MAX_DIVIDED_STEP_ITERATIONS = 10;
+
 /** How many equal parts a time step that fails to converge is retried in. */
 const STEP_DIVISIONS = 4;
 
-/** How many times a failed step may be divided: the smallest is 1/1024 of the set step. */
-const MAX_DIVISION_DEPTH = 5;
+/**
+ * The smallest step a failed one is divided into, in seconds. Steps divide down to this
+ * however large the set step is: positive feedback, as in a comparator with hysteresis,
+ * snaps over in nanoseconds, and a step only converges through it once it is shorter.
+ */
+const MIN_DIVIDED_STEP = 1e-12;
 
 /** Newton iterations allowed for one DC solve at a given source level. */
 const MAX_DC_ITERATIONS = 200;
@@ -267,10 +278,10 @@ export class Simulation {
   private readonly conductorCurrents: ConductorCurrents;
   /** The solution before the step being solved, to go back to when it fails. */
   private readonly previousSolution: Float64Array;
-  /** How many times the set time step was divided to reach this one's. */
-  private readonly divisionDepth: number;
   /** Solves this one's failed steps in smaller ones; built on the first failure. */
   private finer: Simulation | null = null;
+  /** Newton iterations a step may take before it counts as failed. */
+  private maxStepIterations = MAX_STEP_ITERATIONS;
   /**
    * The elements that do something in each step hook or own a branch. Steps visit only
    * these, so the wires that make up most of a schematic cost nothing per step.
@@ -292,11 +303,9 @@ export class Simulation {
     elements: readonly CircuitElement[],
     mode: AnalysisMode,
     timeStep: number,
-    divisionDepth = 0,
   ) {
     this.elements = elements;
     this.mode = mode;
-    this.divisionDepth = divisionDepth;
     this.netlist = buildNetlist(elements, mode);
     this.system = new MnaSystem(
       this.netlist.nodeCount,
@@ -525,7 +534,7 @@ export class Simulation {
       element.startStep(this.system);
     }
 
-    if (this.iterate(MAX_STEP_ITERATIONS)) {
+    if (this.iterate(this.maxStepIterations)) {
       this.finish();
     } else if (!this.canDivide() || !this.stepFiner()) {
       return false;
@@ -540,7 +549,7 @@ export class Simulation {
   private canDivide() {
     return (
       this.error === CONVERGENCE_MESSAGE &&
-      this.divisionDepth < MAX_DIVISION_DEPTH
+      this.system.timeStep / STEP_DIVISIONS >= MIN_DIVIDED_STEP
     );
   }
 
@@ -561,11 +570,11 @@ export class Simulation {
       this.elements,
       this.mode,
       system.timeStep / STEP_DIVISIONS,
-      this.divisionDepth + 1,
     );
 
     const { finer } = this;
 
+    finer.maxStepIterations = MAX_DIVIDED_STEP_ITERATIONS;
     finer.updatesIdleElements = this.updatesIdleElements;
     finer.stampBase();
     finer.system.solution.set(system.solution);

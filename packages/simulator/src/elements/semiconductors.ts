@@ -11,7 +11,7 @@ import {
   type Point,
   roundPoint,
 } from "../geometry";
-import type { AcSystem, MnaSystem } from "../mna-system";
+import { type AcSystem, mispredicts, type MnaSystem } from "../mna-system";
 import { CUSTOM_MODEL, ParamSet, type ParamSpec, type Preset } from "../params";
 import { parseSpiceModel, type SpiceModel } from "../spice-model";
 import { formatSi } from "../units";
@@ -995,6 +995,57 @@ type ChannelPoint = {
   outputConductance: number; // dI/dVds
 };
 
+/** Leakage across a FET's channel, so an off channel does not float: 10 nS. */
+const CHANNEL_LEAKAGE = 1e-8;
+
+/**
+ * SPICE's `fetlim`: limits a Newton step in a FET's gate voltage from `last` to `next`,
+ * for a channel that turns on at `threshold`. Well below or above threshold it allows
+ * large steps; it slows down only as the channel turns on or off.
+ */
+function limitGateVoltage(next: number, last: number, threshold: number) {
+  const wide = Math.abs(2 * (last - threshold)) + 2;
+  const narrow = Math.abs(last - threshold) + 1;
+  const fullyOn = threshold + 3.5;
+  const justOn = threshold + 0.5;
+  const isRising = next > last;
+
+  if (last < threshold) {
+    if (!isRising) {
+      return Math.max(next, last - wide);
+    }
+
+    return next <= justOn ? Math.min(next, last + narrow) : justOn;
+  }
+
+  if (last < fullyOn) {
+    return isRising
+      ? Math.min(next, threshold + 4)
+      : Math.max(next, threshold - 0.5);
+  }
+
+  if (isRising) {
+    return Math.min(next, last + wide);
+  }
+
+  return next >= fullyOn
+    ? Math.max(next, last - narrow)
+    : Math.max(next, threshold + 2);
+}
+
+/** SPICE's `limvds`: limits a Newton step in a FET's drain voltage from `last` to `next`. */
+function limitDrainVoltage(next: number, last: number) {
+  if (last < 3.5) {
+    return next > last ? Math.min(next, 4) : Math.max(next, -0.5);
+  }
+
+  if (next > last) {
+    return Math.min(next, 3 * last + 2);
+  }
+
+  return next < 3.5 ? Math.max(next, 2) : next;
+}
+
 /** MOSFET parts; `polarity` is 1 for N-channel and -1 for P-channel. */
 const MOSFET_PRESETS: readonly Preset[] = [
   {
@@ -1061,8 +1112,13 @@ export class Mosfet extends CircuitElement {
   readonly gateDrain = new CompanionCapacitor(0);
   /** Channel current into the drain. */
   drainCurrent = 0;
+  /** Vgs and Vds as last linearized at, in N-channel terms. */
   private lastVgs = 0;
   private lastVds = 0;
+  /** The channel current, drain to source in N-channel terms, and its slopes there. */
+  private lastCurrent = 0;
+  private lastGateSlope = 0;
+  private lastDrainSlope = 0;
 
   static override read(
     x1: number,
@@ -1165,61 +1221,122 @@ export class Mosfet extends CircuitElement {
     this.gateDrain.startStep(system);
   }
 
+  /** The test predicts the channel current, as SPICE's does; JFETs add junctions. */
+  override hasExactConvergenceTest() {
+    return true;
+  }
+
+  /** The gate voltage, in N-channel terms, at which the channel starts to conduct. */
+  protected threshold() {
+    return this.params.get("vto");
+  }
+
+  /**
+   * Limits a Newton step to `vgs` and `vds` from the last linearization, as SPICE does: by
+   * the gate voltage on the side the channel conducts from, then the drain voltage.
+   */
+  private limitStep(vgs: number, vds: number) {
+    const threshold = this.threshold();
+
+    // Each limit adds its correction to the measured voltages, so a step left alone
+    // comes back exactly as measured.
+    if (this.lastVds >= 0) {
+      const gateShift = limitGateVoltage(vgs, this.lastVgs, threshold) - vgs;
+
+      return {
+        vgs: vgs + gateShift,
+        vds: limitDrainVoltage(vds + gateShift, this.lastVds),
+      };
+    }
+
+    // With the drain below the source, the drain acts as the source.
+    const vgd = vgs - vds;
+
+    const gateShift =
+      limitGateVoltage(vgd, this.lastVgs - this.lastVds, threshold) - vgd;
+
+    const limitedVds = -limitDrainVoltage(gateShift - vds, -this.lastVds);
+
+    return { vgs: vgs + (gateShift + limitedVds - vds), vds: limitedVds };
+  }
+
+  /**
+   * The channel current from drain to source at `vgs` and `vds`, in N-channel terms, with
+   * its slopes in Vgs and Vds. With the drain below the source, the terminals swap roles.
+   */
+  private channelAt(vgs: number, vds: number) {
+    if (vds >= 0) {
+      const channel = this.channelCurrent(vgs, vds);
+
+      return {
+        current: channel.current + CHANNEL_LEAKAGE * vds,
+        gateSlope: channel.transconductance,
+        drainSlope: channel.outputConductance + CHANNEL_LEAKAGE,
+      };
+    }
+
+    const channel = this.channelCurrent(vgs - vds, -vds);
+
+    return {
+      current: CHANNEL_LEAKAGE * vds - channel.current,
+      gateSlope: -channel.transconductance,
+      drainSlope:
+        channel.transconductance + channel.outputConductance + CHANNEL_LEAKAGE,
+    };
+  }
+
   override stampStep(system: MnaSystem) {
     const sign = this.polarity;
+    const gate = this.node(0);
+    const source = this.node(1);
     const drainIndex = this.channelDrain();
+    const drain = this.node(drainIndex);
     const vg = this.volts[0] ?? 0;
     const vs = this.volts[1] ?? 0;
     const vd = this.volts[drainIndex] ?? 0;
-    let vgs = sign * (vg - vs);
-    let vds = sign * (vd - vs);
+    const measuredVgs = sign * (vg - vs);
+    const measuredVds = sign * (vd - vs);
+    const { vgs, vds } = this.limitStep(measuredVgs, measuredVds);
+    const channel = this.channelAt(vgs, vds);
 
-    // Newton has not converged while Vgs or Vds moves more than 10 mV.
+    const predicted =
+      this.lastCurrent +
+      this.lastGateSlope * (vgs - this.lastVgs) +
+      this.lastDrainSlope * (vds - this.lastVds);
+
+    // Converged once a step lands where the last linearization predicted the current,
+    // and limiting left it alone.
     if (
-      Math.abs(vgs - this.lastVgs) > 0.01 ||
-      Math.abs(vds - this.lastVds) > 0.01
+      vgs !== measuredVgs ||
+      vds !== measuredVds ||
+      mispredicts(channel.current, predicted)
     ) {
       system.converged = false;
     }
 
-    // Limit each Newton step to 0.5 V for Vgs and 1 V for Vds.
-    vgs = this.lastVgs + Math.max(-0.5, Math.min(0.5, vgs - this.lastVgs));
-    vds = this.lastVds + Math.max(-1, Math.min(1, vds - this.lastVds));
     this.lastVgs = vgs;
     this.lastVds = vds;
+    this.lastCurrent = channel.current;
+    this.lastGateSlope = channel.gateSlope;
+    this.lastDrainSlope = channel.drainSlope;
 
-    // With the drain below the source, the terminals swap roles.
-    const isSwapped = vds < 0;
-    const gate = this.node(0);
-    const source = isSwapped ? this.node(drainIndex) : this.node(1);
-    const drain = isSwapped ? this.node(1) : this.node(drainIndex);
-    const effectiveVgs = isSwapped ? vgs - vds : vgs;
-    const effectiveVds = Math.abs(vds);
-    const channel = this.channelCurrent(effectiveVgs, effectiveVds);
-    const transconductance = channel.transconductance;
-    // Add 10 nS of leakage, so an off channel does not float.
-    const current = channel.current + 1e-8 * effectiveVds;
-    const outputConductance = channel.outputConductance + 1e-8;
-
-    // Linearize the current into the effective drain, in real polarity.
-    const drainCurrent = sign * current;
+    // The current drain to source, linearized, in real polarity.
+    const { gateSlope, drainSlope } = channel;
 
     const constant =
-      drainCurrent -
-      transconductance * sign * effectiveVgs -
-      outputConductance * sign * effectiveVds;
+      sign * (channel.current - gateSlope * vgs - drainSlope * vds);
 
-    system.stampMatrix(drain, gate, transconductance);
-    system.stampMatrix(drain, drain, outputConductance);
-    system.stampMatrix(drain, source, -transconductance - outputConductance);
+    system.stampMatrix(drain, gate, gateSlope);
+    system.stampMatrix(drain, drain, drainSlope);
+    system.stampMatrix(drain, source, -gateSlope - drainSlope);
     system.stampRightSide(drain, -constant);
-    system.stampMatrix(source, gate, -transconductance);
-    system.stampMatrix(source, drain, -outputConductance);
-    system.stampMatrix(source, source, transconductance + outputConductance);
+    system.stampMatrix(source, gate, -gateSlope);
+    system.stampMatrix(source, drain, -drainSlope);
+    system.stampMatrix(source, source, gateSlope + drainSlope);
     system.stampRightSide(source, constant);
-    this.gateSource.stampStep(system, this.node(0), this.node(1));
-    this.gateDrain.stampStep(system, this.node(0), this.node(drainIndex));
-    this.drainCurrent = isSwapped ? -drainCurrent : drainCurrent;
+    this.gateSource.stampStep(system, gate, source);
+    this.gateDrain.stampStep(system, gate, drain);
+    this.drainCurrent = sign * channel.current;
   }
 
   /**
@@ -1298,6 +1415,9 @@ export class Mosfet extends CircuitElement {
     super.reset();
     this.lastVgs = 0;
     this.lastVds = 0;
+    this.lastCurrent = 0;
+    this.lastGateSlope = 0;
+    this.lastDrainSlope = 0;
     this.drainCurrent = 0;
     this.gateSource.reset();
     this.gateDrain.reset();
@@ -1550,6 +1670,16 @@ export class Jfet extends Mosfet {
     return this.params.isGeneric
       ? `Idss ${formatSi(this.params.get("beta") * vto * vto, "A")}`
       : this.params.modelName;
+  }
+
+  /** Its gate junctions test voltages, which is not exact. */
+  override hasExactConvergenceTest() {
+    return false;
+  }
+
+  /** Conducts from Vgs = −VTO on. */
+  protected override threshold() {
+    return -this.params.get("vto");
   }
 
   /** Conducts from Vgs = −VTO on, so it is on with the gate at the source. */
