@@ -9,9 +9,6 @@ export type Bounds = {
   bottom: number;
 };
 
-/** How far an element's drawing reaches beyond its posts, for hit tests and framing. */
-const BODY_MARGIN = 12;
-
 /** Returns the box around `points`, grown by `margin` on each side. */
 function boundsOf(points: readonly Point[], margin: number): Bounds {
   const xs = points.map(({ x }) => x);
@@ -32,7 +29,7 @@ function extentPoints(element: CircuitElement) {
 
 /** Returns the box that an element's drawing roughly fills. */
 function elementBounds(element: CircuitElement): Bounds {
-  return boundsOf(extentPoints(element), BODY_MARGIN);
+  return boundsOf(extentPoints(element), element.bodyMargin());
 }
 
 /** Returns the box around every element's drawing, or null for an empty list. */

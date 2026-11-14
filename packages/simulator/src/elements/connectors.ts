@@ -1,6 +1,7 @@
 import {
   CircuitElement,
   type EditField,
+  EXTENDED_FORMAT_FLAG,
   escapeText,
   type TokenReader,
   unescapeText,
@@ -384,6 +385,15 @@ function formatReading(value: number | null | undefined, unit: string) {
   return value === null || value === undefined ? "–" : formatSi(value, unit, 4);
 }
 
+/** The probe's readings, in readout order; bit `index` of its `shownReadings` shows one. */
+const PROBE_READINGS = ["V", "V(p-p)", "V(rms)", "V(dc)", "frequency"] as const;
+
+/** Every reading shown, as a new probe and Falstad's files have it. */
+const ALL_PROBE_READINGS = (1 << PROBE_READINGS.length) - 1;
+
+/** The readout's text size in schematic units, the same as other part labels. */
+const PROBE_TEXT_SIZE = 11;
+
 /**
  * A voltage probe, as in Multisim: its tip reads the net beneath it against ground.
  * The tip is no post, so placing or moving the probe never changes the wiring; it reads
@@ -397,6 +407,10 @@ export class VoltageProbe extends CircuitElement {
   override readonly designatorPrefix = "PR";
   /** Falstad's display scale for the reading, kept so its files save unchanged. */
   scale = 0;
+  /** Which readings its readout shows, one bit each in `PROBE_READINGS` order. */
+  shownReadings = ALL_PROBE_READINGS;
+  /** Its readout's text size, in schematic units. */
+  textSize = PROBE_TEXT_SIZE;
   readonly meter = new SignalMeter();
 
   static override read(
@@ -410,6 +424,11 @@ export class VoltageProbe extends CircuitElement {
     const probe = new VoltageProbe(x1, y1, x2, y2, flags);
 
     probe.scale = reader.number(0);
+
+    if ((flags & EXTENDED_FORMAT_FLAG) !== 0) {
+      probe.shownReadings = reader.number(ALL_PROBE_READINGS);
+      probe.textSize = reader.number(PROBE_TEXT_SIZE);
+    }
 
     return probe;
   }
@@ -453,8 +472,47 @@ export class VoltageProbe extends CircuitElement {
     ];
   }
 
+  /** True when its readout shows reading `index` of `PROBE_READINGS`. */
+  private isShown(index: number) {
+    return (this.shownReadings & (1 << index)) !== 0;
+  }
+
+  /** The readout lines its dialog leaves on, in `readings` order. */
+  readout() {
+    return this.readings().filter((_line, index) => this.isShown(index));
+  }
+
   override valueLabel() {
     return formatSi(this.voltage, "V");
+  }
+
+  override editFields(): EditField[] {
+    const textSize: EditField = {
+      kind: "number",
+      key: "text-size",
+      label: "Text size",
+      unit: "px",
+      value: this.textSize,
+      range: "positive",
+      hint: `${PROBE_TEXT_SIZE} px matches the other part labels.`,
+      set: (value) => {
+        this.textSize = value;
+      },
+    };
+
+    const readings = PROBE_READINGS.map((reading, index): EditField => ({
+      kind: "boolean",
+      key: `show-${index}`,
+      label: `Show ${reading}`,
+      value: this.isShown(index),
+      set: (isShown) => {
+        this.shownReadings = isShown
+          ? this.shownReadings | (1 << index)
+          : this.shownReadings & ~(1 << index);
+      },
+    }));
+
+    return [textSize, ...readings];
   }
 
   override info() {
@@ -483,7 +541,17 @@ export class VoltageProbe extends CircuitElement {
     this.meter.reset();
   }
 
+  /** Only a readout changed from the default needs values Falstad does not write. */
+  protected override hasExtendedValues() {
+    return (
+      this.shownReadings !== ALL_PROBE_READINGS ||
+      this.textSize !== PROBE_TEXT_SIZE
+    );
+  }
+
   override dumpValues() {
-    return [this.scale];
+    return this.hasExtendedValues()
+      ? [this.scale, this.shownReadings, this.textSize]
+      : [this.scale];
   }
 }

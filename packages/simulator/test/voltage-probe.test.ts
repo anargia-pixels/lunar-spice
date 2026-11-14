@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { operatingPoint } from "../src/analyses";
-import { Circuit } from "../src/circuit";
+import { Circuit, cloneElement } from "../src/circuit";
 import { VoltageProbe } from "../src/elements/connectors";
 import { SignalMeter } from "../src/signal-meter";
 import { Simulation } from "../src/simulation";
@@ -85,6 +85,34 @@ describe("voltage probe", () => {
 
     expect(probe?.designator).toBe("PR1");
     expect(probe?.dump()).toBe("O 0 0 16 -16 0 0");
+  });
+
+  test("saves a changed readout behind the extended flag", () => {
+    const probe = Circuit.parse(RAIL_CIRCUIT).elements.find(
+      (e) => e instanceof VoltageProbe,
+    );
+
+    probe
+      ?.editFields()
+      .find(({ key }) => key === "show-1")
+      ?.set(false);
+    probe
+      ?.editFields()
+      .find(({ key }) => key === "text-size")
+      ?.set(14);
+
+    // 65536 is the extended flag; 29 shows every reading but V(p-p).
+    expect(probe?.dump()).toBe("O 0 0 16 -16 65536 0 29 14");
+
+    const copy = probe && cloneElement(probe);
+
+    expect(copy instanceof VoltageProbe && copy.textSize).toBe(14);
+    expect(copy instanceof VoltageProbe && copy.readout()).toEqual([
+      "V: –",
+      "V(rms): –",
+      "V(dc): –",
+      "Freq: –",
+    ]);
   });
 
   test("reads its tip against ground in results", () => {

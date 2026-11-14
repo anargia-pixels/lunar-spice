@@ -4,7 +4,7 @@ import { operatingPoint, transient } from "../src/analyses";
 import { Circuit } from "../src/circuit";
 import { EXAMPLES } from "../src/examples";
 import { pointKey } from "../src/geometry";
-import { flipElements, rotateElements } from "../src/layout";
+import { distanceToElement, flipElements, rotateElements } from "../src/layout";
 import { Simulation } from "../src/simulation";
 import { joinPostsToWires, mergeWires } from "../src/wiring";
 
@@ -60,6 +60,21 @@ describe("layout", () => {
 
     return { element, keys: () => element.posts().map(pointKey) };
   }
+
+  test("a transistor is picked only within the box its leads bound", () => {
+    const { element } = postKeys("t 0 0 32 0 0 1 0 0 100");
+
+    // Base (0, 0), collector (32, -16), emitter (32, 16).
+    expect(distanceToElement(element, { x: 16, y: 8 })).toBe(0);
+    expect(distanceToElement(element, { x: -10, y: 0 })).toBe(10);
+    expect(distanceToElement(element, { x: 16, y: -26 })).toBe(10);
+  });
+
+  test("an op-amp is still picked on its body beyond its posts", () => {
+    const [opAmp] = Circuit.parse("a 0 0 64 0 0 15 -15 1000000 0 0").elements;
+
+    expect(opAmp && distanceToElement(opAmp, { x: -10, y: 0 })).toBe(0);
+  });
 
   test("four quarter turns bring a transistor back", () => {
     const { element, keys } = postKeys("t 0 0 32 0 0 1 0 0 100");

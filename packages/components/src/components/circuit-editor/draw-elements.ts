@@ -527,7 +527,8 @@ export class SchematicPainter {
 
   /**
    * A lead from the post to a pointed probe head at the far end, with Multisim's readout
-   * beside the head: the designator, then V, V(p-p), V(rms), V(dc) and frequency.
+   * beside the head: the designator, then whichever of V, V(p-p), V(rms), V(dc) and
+   * frequency its dialog leaves on, at its text size.
    */
   private drawVoltageProbe(element: CircuitElement) {
     const { start, end } = element;
@@ -561,8 +562,8 @@ export class SchematicPainter {
       return;
     }
 
-    const lines = [element.designator, ...element.readings()].filter(Boolean);
-    const lineHeight = LABEL_SIZE + 2;
+    const lines = [element.designator, ...element.readout()].filter(Boolean);
+    const lineHeight = element.textSize + 2;
     const blockHeight = (lines.length - 1) * lineHeight;
     const isLeft = end.x < start.x;
 
@@ -579,6 +580,7 @@ export class SchematicPainter {
           y: top + index * lineHeight,
         },
         isLeft ? "right" : "left",
+        element.textSize,
       ),
     );
   }

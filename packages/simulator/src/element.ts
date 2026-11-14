@@ -308,6 +308,15 @@ export abstract class CircuitElement {
     return false;
   }
 
+  /**
+   * How far its drawing reaches beyond the box around its start, end and posts, for hit
+   * tests and framing: an IC's box or an op-amp's triangle; 0 for a part drawn between
+   * its leads, like a transistor.
+   */
+  bodyMargin() {
+    return 12;
+  }
+
   /** True when it stretches to wherever it is drawn, like a wire; parts keep their size. */
   isStretchable() {
     return false;
@@ -434,6 +443,14 @@ export abstract class CircuitElement {
     return [];
   }
 
+  /**
+   * True when its line carries values Falstad does not write: always for elements that set
+   * `usesExtendedFormat`, only for some settings on others.
+   */
+  protected hasExtendedValues() {
+    return this.usesExtendedFormat;
+  }
+
   /** True when its label was moved or renamed, so its line carries `LABEL_MARKER`. */
   private hasCustomLabel() {
     return (
@@ -502,7 +519,7 @@ export abstract class CircuitElement {
       this.y1,
       this.x2,
       this.y2,
-      this.usesExtendedFormat || this.hasCustomLabel()
+      this.hasExtendedValues() || this.hasCustomLabel()
         ? this.flags | EXTENDED_FORMAT_FLAG
         : this.flags & ~EXTENDED_FORMAT_FLAG,
       ...this.dumpValues(),

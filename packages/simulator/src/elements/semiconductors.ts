@@ -722,6 +722,11 @@ export class Bjt extends CircuitElement {
     return [this.start, roundPoint(collector), roundPoint(emitter)];
   }
 
+  /** Drawn between its leads, so only the box they bound picks it. */
+  override bodyMargin() {
+    return 0;
+  }
+
   override isNonlinear() {
     return true;
   }
@@ -1122,6 +1127,11 @@ export class Mosfet extends CircuitElement {
     const [source, drain] = interpolatePair(this.start, this.end, 1, across);
 
     return [this.start, roundPoint(source), roundPoint(drain)];
+  }
+
+  /** Drawn between its leads, so only the box they bound picks it. */
+  override bodyMargin() {
+    return 0;
   }
 
   override internalNodeCount() {
