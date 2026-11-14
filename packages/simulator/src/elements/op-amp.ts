@@ -148,6 +148,22 @@ const OP_AMP_PRESETS: readonly Preset[] = [
       vmin: -13,
     },
   },
+  {
+    // A comparator: datasheets give response times, not a GBW. 120 MHz turns 5 mV of
+    // overdrive into 3.8 V/µs, a 5 V swing in the 1.3 µs it quotes; 17 V/µs swings 5 V
+    // in its 0.3 µs for a TTL step. The open-collector output sinks 4 mA at 150 mV
+    // (37.5 Ω) and rises to its pull-up, here the +15 V rail.
+    name: "LM393 (±15 V)",
+    values: {
+      gain: 200_000,
+      gbw: 1.2e8,
+      slew: 17,
+      rout: 37.5,
+      vos: 2e-3,
+      vmax: 15,
+      vmin: -15,
+    },
+  },
 ];
 
 /** Ratio of the swing limiter's pull to the input stage's largest current. */

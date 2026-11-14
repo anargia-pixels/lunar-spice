@@ -165,6 +165,32 @@ describe("DC operating point", () => {
 
     expect(netVoltage(text, "out")).toBeCloseTo(-1, 3);
   });
+
+  test("an LM393 compares its inputs into a 5.1 kΩ pull-up", () => {
+    const [opAmp] = Circuit.parse("a 64 16 160 16 0 15 -15 1000000").elements;
+
+    opAmp
+      ?.editFields()
+      .find(({ kind }) => kind === "preset")
+      ?.set("LM393 (±15 V)");
+
+    /** The comparator with `input` volts on its non-inverting input, the other grounded. */
+    const comparing = (input: number) =>
+      circuit(
+        `R 64 32 32 32 0 0 40 ${input} 0 0 0.5`,
+        "g 64 0 64 -32 0 0",
+        opAmp?.dump() ?? "",
+        "r 160 16 160 80 0 5100",
+        "R 160 80 160 112 0 0 40 15 0 0 0.5",
+        "207 160 16 192 16 0 out",
+      );
+
+    // The swing limiter holds a saturated output 1/1000 of the 15 V swing past its
+    // limit: 15.015 V high, where no current flows. Low it sits at −15.015 V behind
+    // 37.5 Ω and sinks 30.015 V / 5137.5 Ω = 5.842 mA, which leaves it 0.219 V higher.
+    expect(netVoltage(comparing(0.1), "out")).toBeCloseTo(15.015, 3);
+    expect(netVoltage(comparing(-0.1), "out")).toBeCloseTo(-14.796, 3);
+  });
 });
 
 describe("transient", () => {

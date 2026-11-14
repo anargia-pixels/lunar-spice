@@ -14,8 +14,8 @@ run the analyses you would reach for in Multisim:
 ## Parts
 
 A small set of components, each configurable from its datasheet: pick a real part (1N4148,
-1N4007, 2N3904, BC547B, 2N7000, IRF540N, 2N3819, LM741, TL072, 7805, 7912, LM317, LM337,
-NE555, …), paste a vendor SPICE `.model` card, or type the values yourself.
+1N4007, 2N3904, BC547B, 2N7000, IRF540N, 2N3819, LM741, TL072, LM393, 7805, 7912, LM317,
+LM337, NE555, …), paste a vendor SPICE `.model` card, or type the values yourself.
 
 Resistor · capacitor (ESR) · inductor (DCR) · DC and AC sources (internal resistance) ·
 rail · current source · switch, push switch (normally open or closed) and changeover
@@ -48,8 +48,8 @@ properties (`R1` can become `Rload`). Schematic text uses Poppins or JetBrains M
 View › Schematic font. The canvas grid shows dots or lines, chosen under Settings ›
 Appearances › Grid style. Settings › Appearances › Show net names tags each net with the
 name results use, such as `n12`; drag a tag to move it. Right-click a selection and choose
-Copy selection to PNG (`Alt+Shift+C`) to paste a picture of it into a document or chat, as
-in Excalidraw.
+Copy as PNG (`Alt+Shift+C`) to paste a picture of it into a document or chat, as in
+Excalidraw.
 
 ## Files
 
