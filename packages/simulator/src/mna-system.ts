@@ -1,4 +1,4 @@
-import { LuMatrix } from "./matrix";
+import { LuMatrix, MatrixPattern } from "./matrix";
 
 /**
  * How elements stamp: `transient` steps through time with companion models for
@@ -45,8 +45,11 @@ export class MnaSystem {
   /** Node voltages and branch currents from the latest solve, indexed by unknown. */
   readonly solution: Float64Array;
   readonly lu: LuMatrix;
+  /** The matrix entries any stamp has reached, which steps reset and factor. */
+  readonly pattern: MatrixPattern;
   /** Scratch space for one solve, reused so steps allocate nothing. */
   private readonly work: Float64Array;
+  private readonly result: Float64Array;
   /** Cleared by any nonlinear element whose operating point is still moving. */
   converged = true;
   /** Newton iteration within the current step, from 0. */
@@ -74,19 +77,28 @@ export class MnaSystem {
     this.rhs = new Float64Array(this.size);
     this.solution = new Float64Array(this.size + 1);
     this.lu = new LuMatrix(this.size);
+    this.pattern = new MatrixPattern(this.size);
     this.work = new Float64Array(this.size);
+    this.result = new Float64Array(this.size);
   }
 
   /**
    * Sends later stamps into the working copy, which starts from the base. Linear circuits
    * stamp only right-hand sides during steps, so `isMatrixStamped` false skips copying
-   * the matrix they never change.
+   * the matrix they never change. Only entries a stamp has reached can differ from the
+   * base, so only those are reset.
    */
   beginStep(isMatrixStamped = true) {
     this.isStampingBase = false;
 
     if (isMatrixStamped) {
-      this.matrix.set(this.base);
+      const { indices } = this.pattern;
+
+      for (let entry = 0; entry < indices.length; entry += 1) {
+        const index = indices[entry] ?? 0;
+
+        this.matrix[index] = this.base[index] ?? 0;
+      }
     }
 
     this.rhs.set(this.baseRhs);
@@ -118,6 +130,7 @@ export class MnaSystem {
     const index = (row - 1) * this.size + (column - 1);
     const target = this.isStampingBase ? this.base : this.matrix;
 
+    this.pattern.add(index);
     target[index] = (target[index] ?? 0) + value;
   }
 
@@ -174,14 +187,14 @@ export class MnaSystem {
    * false when the circuit has no solution or the result is not finite.
    */
   solve(shouldFactor: boolean) {
-    if (shouldFactor && !this.lu.factor(this.matrix)) {
+    if (shouldFactor && !this.lu.factor(this.matrix, this.pattern)) {
       return false;
     }
 
-    const result = this.work;
+    const { result } = this;
 
-    result.set(this.rhs);
-    this.lu.solve(result);
+    this.work.set(this.rhs);
+    this.lu.solve(this.work, result);
 
     for (let index = 0; index < this.size; index += 1) {
       const value = result[index] ?? 0;

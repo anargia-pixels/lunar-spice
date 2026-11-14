@@ -192,6 +192,19 @@ export class OpAmp extends CircuitElement {
   private lastStageConductance = 0;
   /** Which swing limit holds the pole node: 1 high, -1 low, 0 neither. */
   private limit = 0;
+  /**
+   * The parameters each step reads, as `stamp` last read them: they hold for a whole
+   * simulation, and looking them up every iteration costs more than the stage itself.
+   */
+  private stage = {
+    hasPole: false,
+    gain: 0,
+    offset: 0,
+    vmax: 0,
+    vmin: 0,
+    /** The input stage's largest current, which sets the slew rate. */
+    maxCurrent: 0,
+  };
 
   static override read(
     x1: number,
@@ -274,6 +287,11 @@ export class OpAmp extends CircuitElement {
     return true;
   }
 
+  /** The pole stage tests its predicted current; the clipped stage only how far it moved. */
+  override hasExactConvergenceTest() {
+    return this.hasPole;
+  }
+
   /** Returns the input stage's largest current, which sets the slew rate. */
   private maxStageCurrent() {
     const slew = this.params.get("slew") * 1e6;
@@ -290,6 +308,15 @@ export class OpAmp extends CircuitElement {
   }
 
   override stamp(system: MnaSystem) {
+    this.stage = {
+      hasPole: this.hasPole,
+      gain: this.params.get("gain"),
+      offset: this.params.get("vos"),
+      vmax: this.params.get("vmax"),
+      vmin: this.params.get("vmin"),
+      maxCurrent: 0,
+    };
+
     const row = system.branchUnknown(this.firstBranch);
     const driven = this.node(this.drivenIndex());
     const rin = this.params.get("rin");
@@ -314,6 +341,7 @@ export class OpAmp extends CircuitElement {
 
     this.pole.capacitance =
       this.params.get("gain") / (2 * Math.PI * this.params.get("gbw"));
+    this.stage.maxCurrent = this.maxStageCurrent();
     system.stampMatrix(poleNode, poleNode, 1);
     this.pole.stamp(system, poleNode, 0);
     // The output follows the pole node.
@@ -327,10 +355,10 @@ export class OpAmp extends CircuitElement {
 
   override stampStep(system: MnaSystem) {
     const [inverting = 0, nonInverting = 0] = this.volts;
-    const offset = this.params.get("vos");
+    const { offset, hasPole } = this.stage;
     const difference = nonInverting - inverting + offset;
 
-    if (this.hasPole) {
+    if (hasPole) {
       this.stampPoleStage(system, difference, offset);
     } else {
       this.stampClippedStage(system, difference, offset);
@@ -347,8 +375,7 @@ export class OpAmp extends CircuitElement {
   ) {
     const poleNode = this.node(this.poleIndex());
     const poleVoltage = this.volts[this.poleIndex()] ?? 0;
-    const gain = this.params.get("gain");
-    const maxCurrent = this.maxStageCurrent();
+    const { gain, maxCurrent, vmax, vmin } = this.stage;
     const ratio = Math.tanh((gain * difference) / maxCurrent);
     const current = maxCurrent * ratio;
     const conductance = gain * (1 - ratio * ratio);
@@ -373,8 +400,6 @@ export class OpAmp extends CircuitElement {
     );
 
     // Past a swing limit, a stiff conductance holds the pole node at that limit.
-    const vmax = this.params.get("vmax");
-    const vmin = this.params.get("vmin");
     const limit = poleVoltage > vmax ? 1 : poleVoltage < vmin ? -1 : 0;
 
     if (limit !== this.limit) {
@@ -399,9 +424,7 @@ export class OpAmp extends CircuitElement {
     difference: number,
     offset: number,
   ) {
-    const gain = this.params.get("gain");
-    const vmax = this.params.get("vmax");
-    const vmin = this.params.get("vmin");
+    const { gain, vmax, vmin } = this.stage;
     const output = this.volts[this.drivenIndex()] ?? 0;
 
     // Newton has not converged while the input moves or the output overshoots a limit.

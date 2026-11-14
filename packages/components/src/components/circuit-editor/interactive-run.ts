@@ -2,22 +2,20 @@ import { voltageName } from "@lunar-spice/simulator/analyses";
 import { type Circuit, speedMultiplier } from "@lunar-spice/simulator/circuit";
 import type { CircuitElement } from "@lunar-spice/simulator/element";
 import { type Point, pointKey } from "@lunar-spice/simulator/geometry";
-import { Simulation } from "@lunar-spice/simulator/simulation";
+import { buildNetlist, type Netlist } from "@lunar-spice/simulator/netlist";
 
 import {
   clearScope,
   createScope,
-  recordSample,
   type Scope,
   type ScopeSettings,
   updateScope,
 } from "../../lib/scope";
 import { AudioIo } from "./audio-io";
 import { CurrentDots } from "./current-dots";
+import { mergeState } from "./element-state";
+import type { FromWorker, ScopeData, ToWorker } from "./run-protocol";
 import { INITIAL_STATUS, type SimulationStatus } from "./simulation-status";
-
-/** Longest the simulation may run in one frame, so the UI stays responsive. */
-const FRAME_BUDGET_MS = 14;
 
 /** While only the time moves, the status is reported at most this often. */
 const STATUS_INTERVAL_MS = 100;
@@ -30,39 +28,90 @@ function steadyPart({ time: _time, ...rest }: SimulationStatus) {
   return JSON.stringify(rest);
 }
 
+/** A scope's controls, which the editor owns and the worker follows. */
+function scopeSettings(scope: Scope): ScopeSettings {
+  const { timeSpan, voltageScale, isTriggered, triggerLevel } = scope;
+
+  return { timeSpan, voltageScale, isTriggered, triggerLevel };
+}
+
+/** Copies the trace a scope collected in the worker into the editor's scope. */
+function mergeScope(scope: Scope, data: ScopeData) {
+  if (scope.voltages.length === data.voltages.length) {
+    scope.voltages.set(data.voltages);
+    scope.currents.set(data.currents);
+  }
+
+  scope.count = data.count;
+  scope.timeStep = data.timeStep;
+  scope.peakVoltage = data.peakVoltage;
+  mergeState(scope.meter, data.meter);
+}
+
 export type RunCallbacks = {
   onStatus: (status: SimulationStatus) => void;
   onScopesChange: (scopes: readonly Scope[]) => void;
 };
 
 /**
- * The simulation that runs while the schematic is on screen: it steps the circuit each
- * frame at the set speed, records scopes, moves the current dots and plays sound. Edits
- * rebuild it; elements keep their state across rebuilds, so a running circuit picks up
- * where it left off.
+ * The simulation that runs while the schematic is on screen. A worker steps the circuit
+ * at the set speed on its own thread, records the scopes and makes the sound, so a
+ * heavy circuit gets a whole core and the editor stays smooth. This side sends it the
+ * schematic after every edit and copies back, once a frame, what the simulation changed
+ * on each element, which the schematic draws; it also moves the current dots and plays
+ * and records sound. Elements keep their state across edits, so a running circuit picks
+ * up where it left off.
  */
 export class InteractiveRun {
   private circuit: Circuit | null = null;
-  private simulation: Simulation | null = null;
+  private netlist: Netlist | null = null;
+  /** Node voltages from the latest snapshot, by node. */
+  private voltages: Float64Array<ArrayBufferLike> = new Float64Array(0);
   private isRunning = INITIAL_STATUS.isRunning;
   private time = 0;
   private error: string | null = null;
   private faultSet = new Set<CircuitElement>();
-  private stepRemainder = 0; // part of a step carried to the next frame
   private lastStatus: SimulationStatus | null = null;
   private lastStatusTime = 0;
   private scopes: Scope[] = [];
-  /** Elements by id, so scopes find theirs each step. */
+  /** Elements by id, so snapshots and scopes find theirs. */
   private elementsById = new Map<number, CircuitElement>();
   private readonly dots = new CurrentDots();
   private readonly audio: AudioIo;
   private audioError: string | null = null;
   private readonly callbacks: RunCallbacks;
+  private readonly worker: Worker;
+  /** Counts loads; snapshots of an older one carry state of elements since edited. */
+  private generation = 0;
+  /** True while a frame message waits for its snapshot. */
+  private isFrameRequested = false;
+  /** True when a snapshot came in since the last frame, so the schematic needs drawing. */
+  private hasNewSnapshot = false;
+  /** A number for each element object, so the worker knows which ones stayed. */
+  private readonly instances = new WeakMap<CircuitElement, number>();
+  private instanceCount = 0;
+  /** Ids of the push switches held down. */
+  private readonly pressed = new Set<number>();
 
   constructor(callbacks: RunCallbacks) {
     this.callbacks = callbacks;
-    this.audio = new AudioIo((message) => {
-      this.audioError = message;
+    this.audio = new AudioIo(
+      (message) => {
+        this.audioError = message;
+        this.emitStatus(true);
+      },
+      (samples) => this.send({ kind: "input", samples }, [samples.buffer]),
+    );
+    this.worker = new Worker(new URL("./run-worker.ts", import.meta.url), {
+      type: "module",
+    });
+    this.worker.addEventListener("message", (event: MessageEvent<FromWorker>) =>
+      this.receive(event.data),
+    );
+    this.worker.addEventListener("error", (event) => {
+      event.preventDefault();
+      this.error = `The simulation stopped: ${event.message || "its worker failed."}`;
+      this.updateAudio();
       this.emitStatus(true);
     });
   }
@@ -77,24 +126,59 @@ export class InteractiveRun {
     return this.isRunning && !this.error;
   }
 
+  private send(message: ToWorker, transfer: Transferable[] = []) {
+    this.worker.postMessage(message, transfer);
+  }
+
+  private instanceOf(element: CircuitElement) {
+    let instance = this.instances.get(element);
+
+    if (instance === undefined) {
+      this.instanceCount += 1;
+      instance = this.instanceCount;
+      this.instances.set(element, instance);
+    }
+
+    return instance;
+  }
+
   /**
-   * Builds a new netlist for `circuit` after an edit. Simulated time carries on; scopes
-   * whose element is gone are dropped.
+   * Sends the circuit after an edit. Simulated time carries on unless `isRestart`;
+   * scopes whose element is gone are dropped.
    */
-  rebuild(circuit: Circuit) {
+  rebuild(circuit: Circuit, isRestart = false) {
     this.circuit = circuit;
     this.error = null;
     this.faultSet = new Set();
-    this.simulation = new Simulation(
-      circuit.elements,
-      "transient",
-      circuit.settings.timeStep,
-    );
-    this.simulation.time = this.time;
+    this.netlist = buildNetlist(circuit.elements, "transient");
+    this.voltages = new Float64Array(this.netlist.nodeCount);
+
+    // Until the worker reports, nodes read the voltages their elements last had.
+    for (const element of circuit.elements) {
+      element.nodes.forEach((node, post) => {
+        if (node > 0) {
+          this.voltages[node] = element.volts[post] ?? 0;
+        }
+      });
+    }
+
     this.elementsById = new Map(
       circuit.elements.map((element) => [element.id, element]),
     );
     this.audio.attach(circuit.elements);
+    this.generation += 1;
+    this.send({
+      kind: "load",
+      generation: this.generation,
+      elements: circuit.elements.map((element) => ({
+        line: element.dump(),
+        id: element.id,
+        instance: this.instanceOf(element),
+        isPressed: this.pressed.has(element.id),
+      })),
+      settings: { ...circuit.settings },
+      isRestart,
+    });
 
     const scopes = this.scopes.filter(({ elementId }) =>
       this.elementsById.has(elementId),
@@ -112,7 +196,7 @@ export class InteractiveRun {
   start(circuit: Circuit) {
     this.time = 0;
     this.setScopes([]);
-    this.rebuild(circuit);
+    this.rebuild(circuit, true);
   }
 
   /** Discharges everything and starts again from 0 s. */
@@ -124,7 +208,22 @@ export class InteractiveRun {
       clearScope(scope);
     }
 
-    this.rebuild(circuit);
+    this.rebuild(circuit, true);
+  }
+
+  /** Holds a push switch down or lets it go. */
+  press(element: CircuitElement, isDown: boolean) {
+    element.press(isDown);
+
+    if (isDown) {
+      this.pressed.add(element.id);
+    } else {
+      this.pressed.delete(element.id);
+    }
+
+    if (this.circuit) {
+      this.rebuild(this.circuit);
+    }
   }
 
   private setRunning(isRunning: boolean) {
@@ -134,6 +233,7 @@ export class InteractiveRun {
       this.rebuild(this.circuit);
     }
 
+    this.send({ kind: "running", isRunning });
     this.updateAudio();
     this.emitStatus(true);
   }
@@ -144,56 +244,33 @@ export class InteractiveRun {
 
   /** Follows new settings: a new time step rebuilds the companion models. */
   updateSettings() {
-    const { simulation, circuit } = this;
-
-    if (circuit && simulation?.system.timeStep !== circuit.settings.timeStep) {
-      this.rebuild(circuit);
-    } else {
-      this.updateAudio();
+    if (this.circuit) {
+      this.send({ kind: "settings", settings: { ...this.circuit.settings } });
     }
+
+    this.updateAudio();
   }
 
   /**
-   * Steps the simulation for one frame's worth of time, within the frame budget.
-   * Returns false when it does not step: paused, stopped by an error, or not built.
+   * Asks the worker for its latest state and moves the current dots for one frame.
+   * Returns true when the schematic needs drawing: while it runs, and once for the
+   * snapshot a pause or an error reports.
    */
   runFrame(elapsedMs: number, showCurrentDots: boolean) {
-    const { simulation, circuit } = this;
+    const { circuit } = this;
+    const hasNewSnapshot = this.hasNewSnapshot;
 
-    if (!simulation || !circuit || !this.isStepping) {
-      return false;
+    this.hasNewSnapshot = false;
+
+    if (!circuit || !this.isStepping) {
+      return hasNewSnapshot;
     }
 
-    const { timeStep } = circuit.settings;
-    const target = speedMultiplier(circuit.settings);
-
-    const wanted =
-      (target / timeStep) * (elapsedMs / 1000) + this.stepRemainder;
-
-    const steps = Math.floor(wanted);
-    const deadline = performance.now() + FRAME_BUDGET_MS;
-
-    this.stepRemainder = Math.min(wanted - steps, 1);
-
-    for (let step = 0; step < steps; step += 1) {
-      if (!simulation.step()) {
-        this.error = simulation.error;
-        this.faultSet = new Set(simulation.faults);
-        this.updateAudio();
-        break;
-      }
-
-      this.recordScopes(timeStep);
-      this.audio.pushStep(timeStep);
-
-      if (performance.now() > deadline) {
-        break;
-      }
+    // One snapshot at a time, so a busy worker is never asked faster than it answers.
+    if (!this.isFrameRequested) {
+      this.isFrameRequested = true;
+      this.send({ kind: "frame", sound: this.audio.soundSettings() });
     }
-
-    this.audio.flush();
-
-    this.time = simulation.time;
 
     if (showCurrentDots) {
       this.dots.advance(circuit.elements, elapsedMs);
@@ -204,6 +281,57 @@ export class InteractiveRun {
     return true;
   }
 
+  /** Takes a snapshot: sound to play, then element state if it is of this schematic. */
+  private receive(snapshot: FromWorker) {
+    this.isFrameRequested = false;
+
+    if (snapshot.sound) {
+      this.audio.play(snapshot.sound);
+    }
+
+    if (snapshot.generation !== this.generation) {
+      return;
+    }
+
+    this.time = snapshot.time;
+    this.voltages = snapshot.voltages;
+    this.hasNewSnapshot = true;
+
+    for (const [id, patch] of snapshot.states) {
+      const element = this.elementsById.get(id);
+
+      if (element) {
+        mergeState(element, patch);
+      }
+    }
+
+    for (const data of snapshot.scopes) {
+      const scope = this.scopes.find(
+        (candidate) => candidate.elementId === data.elementId,
+      );
+
+      if (scope) {
+        mergeScope(scope, data);
+      }
+    }
+
+    if (snapshot.error && !this.error) {
+      this.error = snapshot.error;
+      this.faultSet = new Set(
+        snapshot.faults.flatMap((id) => {
+          const element = this.elementsById.get(id);
+
+          return element ? [element] : [];
+        }),
+      );
+      this.updateAudio();
+      this.emitStatus(true);
+    }
+
+    // The snapshot a pause reports comes after the pause's status, so it is always shown.
+    this.emitStatus(!this.isStepping);
+  }
+
   /** Where each of an element's current dots starts, by path. */
   dotOffsetsOf(element: CircuitElement): readonly number[] {
     return this.isRunning ? this.dots.of(element) : [];
@@ -211,23 +339,19 @@ export class InteractiveRun {
 
   /** The solved voltage of the node at a post's point; 0 for points not in the netlist. */
   voltageAt(point: Point) {
-    const { simulation } = this;
+    const node = this.netlist?.nodeOfPoint.get(pointKey(point)) ?? 0;
 
-    return (
-      simulation?.system.value(
-        simulation.netlist.nodeOfPoint.get(pointKey(point)) ?? 0,
-      ) ?? 0
-    );
+    return this.voltages[node] ?? 0;
   }
 
   /** What results call `node`, such as `0`, `out` or `n3`. */
   netName(node: number) {
-    return this.simulation?.netlist.nodes[node]?.name ?? `n${node}`;
+    return this.netlist?.nodes[node]?.name ?? `n${node}`;
   }
 
   /** The net at a post's point, as results name it; null for points not in the netlist. */
   netAt(point: Point) {
-    const netlist = this.simulation?.netlist;
+    const { netlist } = this;
     const node = netlist?.nodeOfPoint.get(pointKey(point));
 
     return node === undefined ? null : (netlist?.nodes[node] ?? null);
@@ -274,12 +398,21 @@ export class InteractiveRun {
   }
 
   destroy() {
+    this.worker.terminate();
     this.audio.destroy();
   }
 
   private setScopes(scopes: Scope[]) {
     this.scopes = scopes;
     this.callbacks.onScopesChange(scopes);
+    this.send({
+      kind: "scopes",
+      scopes: scopes.map((scope) => ({
+        elementId: scope.elementId,
+        title: scope.title,
+        settings: scopeSettings(scope),
+      })),
+    });
   }
 
   /** Plays sound only while the run steps at 1×: sound needs simulated time at real time. */
@@ -290,21 +423,6 @@ export class InteractiveRun {
         REAL_TIME_TOLERANCE;
 
     this.audio.update(this.isStepping && isRealTime);
-  }
-
-  private recordScopes(timeStep: number) {
-    for (const scope of this.scopes) {
-      const element = this.elementsById.get(scope.elementId);
-
-      if (element) {
-        // A wire or net label probes its net's voltage to ground.
-        const voltage = element.isNetElement()
-          ? (element.volts[0] ?? 0)
-          : element.voltageDifference();
-
-        recordSample(scope, voltage, element.current, timeStep);
-      }
-    }
   }
 
   private status(): SimulationStatus {

@@ -1,5 +1,10 @@
 import { CircuitElement, type EditField, type TokenReader } from "../element";
-import { type AcSystem, mispredicts, type MnaSystem } from "../mna-system";
+import {
+  type AcSystem,
+  type AnalysisMode,
+  mispredicts,
+  type MnaSystem,
+} from "../mna-system";
 import { ParamSet, type ParamSpec, type Preset } from "../params";
 import { formatSi } from "../units";
 
@@ -83,6 +88,14 @@ export class Microphone extends CircuitElement {
   private lastVoltage = 0;
   private lastCurrent = 0;
   private lastConductance = 0;
+  /**
+   * The drain current as last worked out, and the time, source level and mode it was for.
+   * It depends on nothing else, so every stamp of a step reuses it.
+   */
+  private drain = 0;
+  private drainTime = Number.NaN;
+  private drainScale = Number.NaN;
+  private drainMode: AnalysisMode | null = null;
 
   static override read(
     x1: number,
@@ -111,6 +124,10 @@ export class Microphone extends CircuitElement {
   }
 
   override isNonlinear() {
+    return true;
+  }
+
+  override hasExactConvergenceTest() {
     return true;
   }
 
@@ -146,14 +163,27 @@ export class Microphone extends CircuitElement {
 
   /** The JFET's saturated drain current at the system's time and source level. */
   private drainCurrent(system: MnaSystem) {
-    const pressure = system.mode === "dc" ? 0 : this.pressureAt(system.time);
+    const { mode, time, sourceScale } = system;
 
-    const drain = Math.max(
-      0,
-      this.params.get("bias") + this.currentPerPascal() * pressure,
-    );
+    if (
+      time !== this.drainTime ||
+      sourceScale !== this.drainScale ||
+      mode !== this.drainMode
+    ) {
+      const pressure = mode === "dc" ? 0 : this.pressureAt(time);
 
-    return drain * system.sourceScale;
+      const drain = Math.max(
+        0,
+        this.params.get("bias") + this.currentPerPascal() * pressure,
+      );
+
+      this.drain = drain * sourceScale;
+      this.drainTime = time;
+      this.drainScale = sourceScale;
+      this.drainMode = mode;
+    }
+
+    return this.drain;
   }
 
   override stampStep(system: MnaSystem) {
@@ -205,6 +235,7 @@ export class Microphone extends CircuitElement {
     this.lastVoltage = 0;
     this.lastCurrent = 0;
     this.lastConductance = 0;
+    this.drainTime = Number.NaN;
   }
 
   override info() {

@@ -1,0 +1,177 @@
+import { describe, expect, test } from "bun:test";
+
+import { Circuit } from "../src/circuit";
+import { LuMatrix, MatrixPattern } from "../src/matrix";
+import { Simulation } from "../src/simulation";
+
+/** A dense row-major matrix and the pattern of its nonzero entries. */
+function matrixOf(rows: readonly (readonly number[])[]) {
+  const size = rows.length;
+  const values = new Float64Array(size * size);
+  const pattern = new MatrixPattern(size);
+
+  rows.forEach((row, rowIndex) =>
+    row.forEach((value, column) => {
+      if (value !== 0) {
+        values[rowIndex * size + column] = value;
+        pattern.add(rowIndex * size + column);
+      }
+    }),
+  );
+
+  return { values, pattern };
+}
+
+/** Factors `values` with `lu` and solves for `rhs`; null when it is singular. */
+function solveWith(
+  lu: LuMatrix,
+  values: Float64Array,
+  pattern: MatrixPattern,
+  rhs: readonly number[],
+) {
+  if (!lu.factor(values, pattern)) {
+    return null;
+  }
+
+  const result = new Float64Array(rhs.length);
+
+  lu.solve(Float64Array.from(rhs), result);
+
+  return [...result];
+}
+
+function expectClose(actual: readonly number[] | null, expected: number[]) {
+  expect(actual).not.toBeNull();
+  expected.forEach((value, index) =>
+    expect(actual?.[index] ?? Number.NaN).toBeCloseTo(value, 12),
+  );
+}
+
+describe("sparse LU", () => {
+  test("solves a voltage source's zero diagonal by pivoting", () => {
+    // 1 kΩ from node 1 to ground, held at 5 V by a source whose current is unknown 2:
+    // v1 / 1000 + i = 0 and v1 = 5, so i = -5 mA.
+    const { values, pattern } = matrixOf([
+      [1e-3, 1],
+      [1, 0],
+    ]);
+
+    expectClose(
+      solveWith(new LuMatrix(2), values, pattern, [0, 5]),
+      [5, -0.005],
+    );
+  });
+
+  test("refactors new values with the pivots it chose", () => {
+    const { values, pattern } = matrixOf([
+      [4, 1, 0],
+      [1, 3, 1],
+      [0, 1, 2],
+    ]);
+
+    const lu = new LuMatrix(3);
+
+    expectClose(solveWith(lu, values, pattern, [5, 5, 3]), [1, 1, 1]);
+
+    // Same pattern, new values: [[2, 1, 0], [1, 5, 1], [0, 1, 4]] × [1, 2, 3].
+    values.set([2, 1, 0, 1, 5, 1, 0, 1, 4]);
+    expectClose(solveWith(lu, values, pattern, [4, 14, 14]), [1, 2, 3]);
+  });
+
+  test("chooses new pivots when a chosen one vanishes", () => {
+    const { values, pattern } = matrixOf([
+      [2, 1],
+      [1, 1],
+    ]);
+
+    const lu = new LuMatrix(2);
+
+    expectClose(solveWith(lu, values, pattern, [3, 2]), [1, 1]);
+
+    // A zero diagonal where the first factorization pivoted: [[0, 1], [1, 1]] × [2, 3].
+    values[0] = 0;
+    expectClose(solveWith(lu, values, pattern, [3, 5]), [2, 3]);
+  });
+
+  test("takes in an entry the pattern gains", () => {
+    const { values, pattern } = matrixOf([
+      [1, 0],
+      [0, 1],
+    ]);
+
+    const lu = new LuMatrix(2);
+
+    expectClose(solveWith(lu, values, pattern, [1, 1]), [1, 1]);
+
+    // [[1, 1], [0, 1]] × [2, 3] = [5, 3].
+    values[1] = 1;
+    pattern.add(1);
+    expectClose(solveWith(lu, values, pattern, [5, 3]), [2, 3]);
+  });
+
+  test("names the column without a pivot in a singular matrix", () => {
+    const { values, pattern } = matrixOf([
+      [1, 0, 0],
+      [0, 0, 0],
+      [0, 0, 1],
+    ]);
+
+    const lu = new LuMatrix(3);
+
+    expect(lu.factor(values, pattern)).toBe(false);
+    expect(lu.singularColumn).toBe(1);
+  });
+});
+
+describe("idle elements", () => {
+  const text = [
+    "R 0 0 0 -32 0 0 40 5 0 0 0.5 0",
+    "w 0 0 64 0 0",
+    "r 64 0 64 64 0 1000",
+    "g 64 64 64 80 0 0",
+  ].join("\n");
+
+  test("wires wait for updateIdleElements when asked to", () => {
+    const circuit = Circuit.parse(text);
+    const wire = circuit.elements.find(({ kind }) => kind === "wire");
+    const simulation = new Simulation(circuit.elements, "transient", 1e-6);
+
+    simulation.updatesIdleElements = false;
+    simulation.step();
+
+    expect(wire?.current).toBe(0);
+
+    simulation.updateIdleElements();
+
+    expect(Math.abs(wire?.current ?? 0)).toBeCloseTo(0.005, 9);
+    expect(wire?.volts[0]).toBeCloseTo(5, 9);
+  });
+
+  test("a net label alone gets its voltage without the wire currents", () => {
+    const circuit = Circuit.parse(`${text}\n207 64 0 112 0 0 top`);
+    const wire = circuit.elements.find(({ kind }) => kind === "wire");
+    const label = circuit.elements.find(({ kind }) => kind === "label");
+    const simulation = new Simulation(circuit.elements, "transient", 1e-6);
+
+    simulation.updatesIdleElements = false;
+    simulation.step();
+    simulation.updateIdleElementsAmong(label ? [label] : []);
+
+    expect(label?.volts[0]).toBeCloseTo(5, 9);
+    expect(wire?.current).toBe(0);
+
+    simulation.updateIdleElementsAmong(wire ? [wire] : []);
+
+    expect(Math.abs(wire?.current ?? 0)).toBeCloseTo(0.005, 9);
+  });
+
+  test("wires follow every step by default", () => {
+    const circuit = Circuit.parse(text);
+    const wire = circuit.elements.find(({ kind }) => kind === "wire");
+    const simulation = new Simulation(circuit.elements, "transient", 1e-6);
+
+    simulation.step();
+
+    expect(Math.abs(wire?.current ?? 0)).toBeCloseTo(0.005, 9);
+  });
+});

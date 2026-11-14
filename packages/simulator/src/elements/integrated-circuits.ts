@@ -603,6 +603,11 @@ export class Timer555 extends CircuitElement {
     return true;
   }
 
+  /** Its stamps follow the flip-flop, which only changes when it reports a flip. */
+  override hasExactConvergenceTest() {
+    return true;
+  }
+
   override stamp(system: MnaSystem) {
     // Stamp the divider from VCC through CV and the lower tap to GND.
     const divider = this.params.get("divider");

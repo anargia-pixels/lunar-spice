@@ -1255,8 +1255,7 @@ export class EditorController {
 
     // A push switch stays pressed until the release.
     if (element.isPushButton()) {
-      element.press(true);
-      this.run.rebuild(this.circuit);
+      this.run.press(element, true);
 
       return { kind: "press", element };
     }
@@ -1437,8 +1436,7 @@ export class EditorController {
         break;
       }
       case "press":
-        drag.element.press(false);
-        this.run.rebuild(this.circuit);
+        this.run.press(drag.element, false);
         break;
       case undefined:
         break;

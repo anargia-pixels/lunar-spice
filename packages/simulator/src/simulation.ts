@@ -39,6 +39,17 @@ function overrides(
   return element[hook] !== CircuitElement.prototype[hook];
 }
 
+/** An element's `nodes` and `volts`, read once so solves write its voltages directly. */
+type PostVoltages = {
+  nodes: readonly number[];
+  volts: number[];
+};
+
+/** Returns the `nodes` and `volts` of each of `elements`. */
+function postVoltagesOf(elements: readonly CircuitElement[]): PostVoltages[] {
+  return elements.map(({ nodes, volts }) => ({ nodes, volts }));
+}
+
 /** A wire-like element's place in the wire network around one point. */
 type ConductorEdge = {
   element: CircuitElement;
@@ -233,6 +244,11 @@ export class Simulation {
   readonly netlist: Netlist;
   readonly system: MnaSystem;
   readonly hasNonlinear: boolean;
+  /**
+   * True when every nonlinear element has an exact convergence test, so Newton stops as
+   * soon as they all pass instead of solving once more to confirm.
+   */
+  private readonly hasExactConvergenceTests: boolean;
   time = 0;
   error: string | null = null;
   /**
@@ -240,6 +256,13 @@ export class Simulation {
    * singular, or the ones still moving when Newton gave up. Empty while there is no error.
    */
   faults: readonly CircuitElement[] = [];
+  /**
+   * When false, steps leave the voltages of idle elements (wires, grounds, net labels:
+   * the ones no step hook visits) and the currents through wires for
+   * `updateIdleElements`. The interactive run calls it once a frame instead of every
+   * step; analyses read every element after each step, so they keep the default.
+   */
+  updatesIdleElements = true;
   private isFactored = false;
   private readonly conductorCurrents: ConductorCurrents;
   /** The solution before the step being solved, to go back to when it fails. */
@@ -256,11 +279,14 @@ export class Simulation {
   private readonly stamping: readonly CircuitElement[];
   private readonly finishing: readonly CircuitElement[];
   private readonly branched: readonly CircuitElement[];
-  /** Each element's `nodes` and `volts`, read once so solves write voltages directly. */
-  private readonly postVoltages: readonly {
-    nodes: readonly number[];
-    volts: number[];
-  }[];
+  /**
+   * Voltages solves write: every iteration for the elements that stamp one, after each
+   * step for the others that take part in it, and on request for idle ones.
+   */
+  private readonly iteratedVoltages: readonly PostVoltages[];
+  private readonly steppedVoltages: readonly PostVoltages[];
+  private readonly idleVoltages: readonly PostVoltages[];
+  private readonly idleElements: ReadonlySet<CircuitElement>;
 
   constructor(
     elements: readonly CircuitElement[],
@@ -279,6 +305,9 @@ export class Simulation {
       timeStep,
     );
     this.hasNonlinear = elements.some((element) => element.isNonlinear());
+    this.hasExactConvergenceTests = elements.every(
+      (element) => !element.isNonlinear() || element.hasExactConvergenceTest(),
+    );
     this.conductorCurrents = new ConductorCurrents(elements);
     this.previousSolution = new Float64Array(this.system.solution.length);
     this.starting = elements.filter((element) =>
@@ -291,7 +320,23 @@ export class Simulation {
       overrides(element, "finishStep"),
     );
     this.branched = elements.filter((element) => element.branchCount(mode) > 0);
-    this.postVoltages = elements.map(({ nodes, volts }) => ({ nodes, volts }));
+
+    const iterated = new Set(this.stamping);
+
+    const stepped = new Set(
+      [...this.starting, ...this.finishing, ...this.branched].filter(
+        (element) => !iterated.has(element),
+      ),
+    );
+
+    this.idleElements = new Set(
+      elements.filter(
+        (element) => !iterated.has(element) && !stepped.has(element),
+      ),
+    );
+    this.iteratedVoltages = postVoltagesOf(this.stamping);
+    this.steppedVoltages = postVoltagesOf([...stepped]);
+    this.idleVoltages = postVoltagesOf([...this.idleElements]);
     this.stampBase();
 
     // Seed the solution with the elements' last voltages for a warm start.
@@ -323,9 +368,9 @@ export class Simulation {
     this.isFactored = false;
   }
 
-  /** Copies node voltages from the solution onto each element's posts. */
-  private applySolution() {
-    for (const { nodes, volts } of this.postVoltages) {
+  /** Copies node voltages from the solution onto the posts of `elements`. */
+  private applySolution(elements: readonly PostVoltages[]) {
+    for (const { nodes, volts } of elements) {
       for (let post = 0; post < nodes.length; post += 1) {
         volts[post] = this.system.value(nodes[post] ?? 0);
       }
@@ -355,13 +400,13 @@ export class Simulation {
   /** Runs Newton iterations at the current time and source level; false when they fail. */
   private iterate(maxIterations: number) {
     const { system } = this;
-    let unsettled: CircuitElement[] = [];
+    const unsettled: CircuitElement[] = [];
 
     for (let iteration = 0; iteration < maxIterations; iteration += 1) {
       system.iteration = iteration;
       // The first solve factors the base matrix, so it needs a copy even when linear.
       system.beginStep(this.hasNonlinear || !this.isFactored);
-      unsettled = [];
+      unsettled.length = 0;
 
       // Stamp each element and note the ones whose linearization point still moves.
       for (const element of this.stamping) {
@@ -371,6 +416,15 @@ export class Simulation {
         if (!system.converged) {
           unsettled.push(element);
         }
+      }
+
+      // The last solution already solves every element's equations.
+      if (
+        this.hasExactConvergenceTests &&
+        unsettled.length === 0 &&
+        iteration > 0
+      ) {
+        return true;
       }
 
       if (!system.solve(this.hasNonlinear || !this.isFactored)) {
@@ -384,7 +438,7 @@ export class Simulation {
       }
 
       this.isFactored = true;
-      this.applySolution();
+      this.applySolution(this.iteratedVoltages);
 
       if (!this.hasNonlinear || (unsettled.length === 0 && iteration > 0)) {
         return true;
@@ -397,8 +451,13 @@ export class Simulation {
     return false;
   }
 
-  /** Gives elements their branch currents, finishes their step, then finds wire currents. */
+  /**
+   * Gives elements their voltages and branch currents and finishes their step, then
+   * brings the idle elements up to date unless they wait for `updateIdleElements`.
+   */
   private finish() {
+    this.applySolution(this.steppedVoltages);
+
     for (const element of this.branched) {
       const count = element.branchCount(this.mode);
 
@@ -416,7 +475,38 @@ export class Simulation {
       element.finishStep(this.system);
     }
 
+    if (this.updatesIdleElements) {
+      this.updateIdleElements();
+    }
+  }
+
+  /** Gives the idle elements their voltages from the latest step and finds wire currents. */
+  updateIdleElements() {
+    this.applySolution(this.idleVoltages);
     this.conductorCurrents.update();
+  }
+
+  /**
+   * Brings just `elements` up to date after a step that left idle elements waiting. A
+   * wire, switch or ground needs every wire current, so that updates them all; other idle
+   * elements only need their own voltages.
+   */
+  updateIdleElementsAmong(elements: readonly CircuitElement[]) {
+    if (
+      elements.some((element) => element.isConductor() || element.isGround())
+    ) {
+      this.updateIdleElements();
+
+      return;
+    }
+
+    for (const element of elements) {
+      if (this.idleElements.has(element)) {
+        element.nodes.forEach((node, post) => {
+          element.volts[post] = this.system.value(node);
+        });
+      }
+    }
   }
 
   /**
@@ -463,7 +553,8 @@ export class Simulation {
     const { system } = this;
 
     system.solution.set(this.previousSolution);
-    this.applySolution();
+    // Only the elements that stamp had voltages from the failed iterations.
+    this.applySolution(this.iteratedVoltages);
     this.error = null;
     this.faults = [];
     this.finer ??= new Simulation(
@@ -475,6 +566,7 @@ export class Simulation {
 
     const { finer } = this;
 
+    finer.updatesIdleElements = this.updatesIdleElements;
     finer.stampBase();
     finer.system.solution.set(system.solution);
     finer.time = this.time;

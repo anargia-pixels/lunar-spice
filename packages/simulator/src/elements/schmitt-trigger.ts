@@ -194,6 +194,11 @@ export class SchmittTrigger extends CircuitElement {
     return true;
   }
 
+  /** Its stamps follow its state, which only changes when it reports a flip. */
+  override hasExactConvergenceTest() {
+    return true;
+  }
+
   override stamp(system: MnaSystem) {
     const rout = this.params.get("rout");
 

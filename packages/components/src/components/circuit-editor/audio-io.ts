@@ -1,7 +1,7 @@
 import type { CircuitElement } from "@lunar-spice/simulator/element";
 import { Microphone, Speaker } from "@lunar-spice/simulator/elements/audio";
 
-import { LiveInput } from "./live-input";
+import type { SoundSettings } from "./run-protocol";
 
 /** Frames per capture callback. */
 const CAPTURE_FRAMES = 1024;
@@ -12,23 +12,20 @@ const OUTPUT_LEAD = 0.06;
 /** Output queued past this is dropped, in seconds, so latency stays bounded. */
 const MAX_OUTPUT_AHEAD = 0.3;
 
-/** Corner of the high-pass that keeps a speaker's DC bias out of the output. */
-const DC_BLOCK_HZ = 10;
-
 /** Output starting sooner than this from now is late, so a new run of output begins. */
 const LATE_START = 0.005;
 
 /**
- * Sound for the interactive simulation: the computer's microphone feeds the circuit's
- * microphones, and its speakers play through the output. Simulated time maps to audio
- * time one to one, so sound only runs while the simulation runs in real time.
- *
- * Input fills a `LiveInput` that the simulation reads at its own pace, a little behind
- * the newest sample. Output is averaged down to the device's sample rate, stripped of
- * DC, and scheduled in one buffer per frame.
+ * Sound for the interactive simulation, on the editor's thread: it records the computer's
+ * microphone for the circuit's microphones and plays what its speakers make. Simulated
+ * time maps to audio time one to one, so sound only runs while the simulation runs in
+ * real time. The run worker, which steps the circuit, reads the input at its own pace
+ * (`RunSound`) and makes the output at the device's sample rate; each batch it sends is
+ * scheduled right after the last.
  */
 export class AudioIo {
   private readonly onError: (message: string | null) => void;
+  private readonly onInput: (samples: Float32Array<ArrayBuffer>) => void;
   private context: AudioContext | null = null;
   private isInputWanted = false;
   private isOutputWanted = false;
@@ -37,23 +34,26 @@ export class AudioIo {
   private stream: MediaStream | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
   private processor: ScriptProcessorNode | null = null;
-  private readonly input = new LiveInput();
-  private pending: number[] = [];
   private nextStart = 0;
-  private accumulated = 0;
-  private accumulatedTime = 0;
-  private previousIn = 0;
-  private previousOut = 0;
   private microphones: Microphone[] = [];
   private speakers: Speaker[] = [];
   private isDestroyed = false;
 
-  constructor(onError: (message: string | null) => void) {
+  /**
+   * `onError` hears why sound cannot run, and null once it can; `onInput` gets each
+   * batch the microphone records, for the run worker.
+   */
+  constructor(
+    onError: (message: string | null) => void,
+    onInput: (samples: Float32Array<ArrayBuffer>) => void,
+  ) {
     this.onError = (message) => {
       if (!this.isDestroyed) {
         onError(message);
       }
     };
+
+    this.onInput = onInput;
   }
 
   /** True when the circuit has a microphone or a speaker. */
@@ -61,16 +61,21 @@ export class AudioIo {
     return this.microphones.length > 0 || this.speakers.length > 0;
   }
 
-  /** Takes the circuit's microphones and speakers; live microphones hear the input. */
+  /** Takes the circuit's microphones and speakers, to know what sound it needs. */
   attach(elements: readonly CircuitElement[]) {
     this.microphones = elements.filter(
       (element) => element instanceof Microphone,
     );
     this.speakers = elements.filter((element) => element instanceof Speaker);
+  }
 
-    for (const microphone of this.microphones) {
-      microphone.liveInput = (time) => this.inputAt(time);
-    }
+  /** What the run worker needs to know to make and hear sound. */
+  soundSettings(): SoundSettings {
+    return {
+      sampleRate: this.context?.sampleRate ?? null,
+      isOutputWanted: this.isOutputWanted && this.context !== null,
+      hasInput: this.stream !== null,
+    };
   }
 
   /** Opens the microphone and output the circuit uses, or closes them when not live. */
@@ -79,21 +84,6 @@ export class AudioIo {
       isLive && this.microphones.some(({ sound }) => sound === "live"),
       isLive && this.speakers.length > 0,
     );
-  }
-
-  /** Adds one simulation step of the speakers' sound, lasting `timeStep`. */
-  pushStep(timeStep: number) {
-    if (!this.isOutputWanted || !this.context) {
-      return;
-    }
-
-    let level = 0;
-
-    for (const speaker of this.speakers) {
-      level += speaker.soundLevel();
-    }
-
-    this.pushOutput(level, timeStep);
   }
 
   /** Opens or closes the microphone and the output as the circuit needs them. */
@@ -162,7 +152,7 @@ export class AudioIo {
   }
 
   /**
-   * Opens the microphone and feeds its samples into the live input. Drops the stream
+   * Opens the microphone and hands its samples to `onInput`. Drops the stream
    * when a newer request or a new context replaced this one while it waited.
    */
   private async startInput(context: AudioContext) {
@@ -193,7 +183,7 @@ export class AudioIo {
       const source = context.createMediaStreamSource(stream);
 
       processor.addEventListener("audioprocess", (event) =>
-        this.input.write(event.inputBuffer.getChannelData(0)),
+        this.onInput(event.inputBuffer.getChannelData(0).slice()),
       );
       source.connect(processor);
       // The processor runs only while connected; its output stays silent.
@@ -225,57 +215,13 @@ export class AudioIo {
     this.processor = null;
     this.source = null;
     this.stream = null;
-    this.input.clear();
   }
 
-  /** The live input at simulated `time`, from −1 to 1; 0 while there is none. */
-  private inputAt(time: number) {
+  /** Schedules output from the run worker right after the last batch. */
+  play(samples: Float32Array<ArrayBuffer>) {
     const { context } = this;
 
-    return this.stream && context
-      ? this.input.read(time, context.sampleRate)
-      : 0;
-  }
-
-  /** Adds one simulation step of output, `level` from −1 to 1, lasting `timeStep`. */
-  private pushOutput(level: number, timeStep: number) {
-    const { context } = this;
-
-    if (!context) {
-      return;
-    }
-
-    const period = 1 / context.sampleRate;
-
-    this.accumulated += level * timeStep;
-    this.accumulatedTime += timeStep;
-
-    if (this.accumulatedTime < period) {
-      return;
-    }
-
-    // The average over each output period filters out what the device cannot play.
-    const value = this.accumulated / this.accumulatedTime;
-    // A one-pole high-pass removes the speakers' DC bias.
-    const pole = 1 - (2 * Math.PI * DC_BLOCK_HZ) / context.sampleRate;
-
-    while (this.accumulatedTime >= period) {
-      const output = value - this.previousIn + pole * this.previousOut;
-
-      this.previousIn = value;
-      this.previousOut = output;
-      this.pending.push(Math.max(-1, Math.min(1, output)));
-      this.accumulatedTime -= period;
-    }
-
-    this.accumulated = value * this.accumulatedTime;
-  }
-
-  /** Schedules the output collected this frame right after the last buffer. */
-  flush() {
-    const { context } = this;
-
-    if (!context || this.pending.length === 0) {
+    if (!context || !this.isOutputWanted || samples.length === 0) {
       return;
     }
 
@@ -286,18 +232,12 @@ export class AudioIo {
     }
 
     if (this.nextStart > now + MAX_OUTPUT_AHEAD) {
-      this.pending = [];
-
       return;
     }
 
-    const buffer = context.createBuffer(
-      1,
-      this.pending.length,
-      context.sampleRate,
-    );
+    const buffer = context.createBuffer(1, samples.length, context.sampleRate);
 
-    buffer.copyToChannel(Float32Array.from(this.pending), 0);
+    buffer.copyToChannel(samples, 0);
 
     const node = context.createBufferSource();
 
@@ -305,16 +245,10 @@ export class AudioIo {
     node.connect(context.destination);
     node.start(this.nextStart);
     this.nextStart += buffer.duration;
-    this.pending = [];
   }
 
   private resetOutput() {
-    this.pending = [];
     this.nextStart = 0;
-    this.accumulated = 0;
-    this.accumulatedTime = 0;
-    this.previousIn = 0;
-    this.previousOut = 0;
   }
 
   destroy() {

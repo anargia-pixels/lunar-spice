@@ -361,6 +361,9 @@ export function transient(
 
   const simulation = new Simulation(circuit.elements, "transient", timeStep);
 
+  // Wires and grounds are brought up to date only for the steps that are recorded.
+  simulation.updatesIdleElements = false;
+
   // Keep at most MAX_RESULT_POINTS points from the start time on.
   const recordedSteps = Math.ceil(
     (stepCount * (stopTime - startTime)) / stopTime,
@@ -385,6 +388,7 @@ export function transient(
 
   /** Records the time and the value of every trace after the latest step. */
   const record = () => {
+    simulation.updateIdleElements();
     times.push(simulation.time);
 
     for (const {

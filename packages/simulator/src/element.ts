@@ -351,6 +351,17 @@ export abstract class CircuitElement {
     return false;
   }
 
+  /**
+   * True when a solution its `stampStep` lets pass already solves its equations, so
+   * Newton can stop without solving again: its test checks the current its last
+   * linearization predicts (`mispredicts`), or its stamps change only when it reports a
+   * change. A test that only bounds how far the operating point moved, such as the
+   * diode's 10 mV, needs one more solve.
+   */
+  hasExactConvergenceTest() {
+    return false;
+  }
+
   /** Stamps the values that stay constant until the netlist or time step changes. */
   stamp(_system: MnaSystem) {}
 
