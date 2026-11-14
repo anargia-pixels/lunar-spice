@@ -31,9 +31,11 @@ import {
 import { Separator } from "@lunar-spice/components/ui/separator";
 import { Slider } from "@lunar-spice/components/ui/slider";
 import { Spinner } from "@lunar-spice/components/ui/spinner";
+import { Switch } from "@lunar-spice/components/ui/switch";
 import {
   readSettings,
   settingsForSpeed,
+  settingsForTimeStep,
   type SimulationSettings,
   speedMultiplier,
 } from "@lunar-spice/simulator/circuit";
@@ -197,6 +199,55 @@ function SiField({
   );
 }
 
+/**
+ * The time step: automatic, sized to the speed, or one the user sets. A manual step keeps
+ * the speed by changing how many steps run a second.
+ */
+function TimeStepFields({
+  settings,
+  onChange,
+}: {
+  settings: SimulationSettings;
+  onChange: (change: Partial<SimulationSettings>) => void;
+}) {
+  const id = useId();
+  const multiplier = speedMultiplier(settings);
+  const { timeStep, isTimeStepManual } = settings;
+  const stepsPerSecond = Math.round(multiplier / timeStep).toLocaleString();
+
+  return (
+    <>
+      <Field orientation="horizontal">
+        <FieldLabel htmlFor={id}>Automatic time step</FieldLabel>
+        <Switch
+          id={id}
+          checked={!isTimeStepManual}
+          onCheckedChange={(isAutomatic) =>
+            onChange(
+              isAutomatic
+                ? settingsForSpeed(multiplier)
+                : settingsForTimeStep(multiplier, timeStep),
+            )
+          }
+        />
+      </Field>
+      {isTimeStepManual ? (
+        <SiField
+          label="Time step"
+          unit="s"
+          value={timeStep}
+          hint={`${stepsPerSecond} steps a second. Smaller steps are more accurate but slower; a heavy circuit may fall behind.`}
+          onCommit={(next) => onChange(settingsForTimeStep(multiplier, next))}
+        />
+      ) : (
+        <p className="text-muted-foreground text-xs text-pretty">
+          {`${formatSi(timeStep, "s")} steps, ${stepsPerSecond} a second, set by the speed.`}
+        </p>
+      )}
+    </>
+  );
+}
+
 /** A labeled dropdown of fixed options. */
 function ChoiceField<T extends string>({
   label,
@@ -257,8 +308,8 @@ function PanelSection({
 }
 
 /**
- * Controls for the interactive simulation: run, pause and reset, the speed and the wire
- * color scale. The speed sets the time step, so there is nothing else to tune.
+ * Controls for the interactive simulation: run, pause and reset, the speed, the time step
+ * and the wire color scale. The speed sets the time step unless the user sets one.
  */
 function InteractiveSection() {
   const status = useSimulationStore((state) => state.status);
@@ -312,9 +363,15 @@ function InteractiveSection() {
             const [first] = Array.isArray(position) ? position : [position];
             const step = first === undefined ? undefined : SPEED_STEPS[first];
 
-            if (step !== undefined) {
-              update(settingsForSpeed(step));
+            if (step === undefined) {
+              return;
             }
+
+            update(
+              settings.isTimeStepManual
+                ? settingsForTimeStep(step, settings.timeStep)
+                : settingsForSpeed(step),
+            );
           }}
         />
         <SpeedTicks />
@@ -330,6 +387,7 @@ function InteractiveSection() {
           <AlertDescription>{status.audioError}</AlertDescription>
         </Alert>
       )}
+      <TimeStepFields settings={settings} onChange={update} />
       <SiField
         label="Full-color voltage"
         unit="V"

@@ -32,7 +32,8 @@ mirror it before you click. Only wires stretch. A voltage probe rests on any wir
 and reads that net without changing the wiring, so it can be moved freely; its properties
 pick which readings it shows and their text size. The interactive simulation runs in real
 time by default; the speed slider steps from 1/1000× to 1000×, and microphones and
-speakers work at 1×.
+speakers work at 1×. The time step follows the speed unless you turn off Automatic time
+step and set your own; the circuit file keeps it.
 
 Wires route as in Multisim and EasyEDA: click to start one, click again for each corner,
 and it ends on the pin or wire you click, on a double-click, or with a right-click or

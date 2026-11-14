@@ -1,6 +1,7 @@
 import {
   type CircuitElement,
   type ElementKind,
+  EXTENDED_FORMAT_FLAG,
   LABEL_MARKER,
   TokenReader,
 } from "./element";
@@ -36,7 +37,10 @@ import { CurrentSource, Rail, VoltageSource } from "./elements/sources";
 
 /** Simulation settings saved in a circuit file's `$` line, as Falstad writes them. */
 export type SimulationSettings = {
-  /** Interactive time step, in seconds; `settingsForSpeed` sets it from the speed. */
+  /**
+   * Interactive time step, in seconds. `settingsForSpeed` sets it from the speed, unless
+   * `isTimeStepManual`, when `settingsForTimeStep` keeps the one the user set.
+   */
   timeStep: number;
   /**
    * Falstad's iteration count: the interactive simulation runs 160 × this steps a second.
@@ -47,14 +51,26 @@ export type SimulationSettings = {
   currentSpeed: number;
   /** Voltage drawn at full color. */
   voltageRange: number;
+  /** True when the user set the time step; false when it follows the speed. */
+  isTimeStepManual: boolean;
 };
 
 /** Interactive steps a second for each unit of Falstad's iteration count. */
 const STEPS_PER_SPEED_UNIT = 160;
 
+/**
+ * Rounds to 12 significant digits, so saving a file and opening it again keeps its
+ * settings line unchanged, and a speed reads as the slider stop it came from.
+ */
+function roundSetting(value: number) {
+  return Number(value.toPrecision(12));
+}
+
 /** Returns the circuit time the interactive simulation covers per second; 1 is real time. */
 export function speedMultiplier(settings: SimulationSettings) {
-  return STEPS_PER_SPEED_UNIT * settings.speed * settings.timeStep;
+  return roundSetting(
+    STEPS_PER_SPEED_UNIT * settings.speed * settings.timeStep,
+  );
 }
 
 /**
@@ -67,17 +83,24 @@ const INTERACTIVE_STEPS_PER_SECOND = 40_000;
 /** The Falstad iteration count that runs those steps; the time step carries the speed. */
 const INTERACTIVE_SPEED = INTERACTIVE_STEPS_PER_SECOND / STEPS_PER_SPEED_UNIT;
 
-/**
- * Returns the time step and Falstad iteration count that run `multiplier` × real time.
- * The step is rounded to 12 significant digits, so saving a file and opening it again
- * keeps its settings line unchanged.
- */
+/** Returns the automatic time step and Falstad iteration count for `multiplier` × real time. */
 export function settingsForSpeed(multiplier: number) {
   return {
-    timeStep: Number(
-      (multiplier / INTERACTIVE_STEPS_PER_SECOND).toPrecision(12),
-    ),
+    timeStep: roundSetting(multiplier / INTERACTIVE_STEPS_PER_SECOND),
     speed: INTERACTIVE_SPEED,
+    isTimeStepManual: false,
+  };
+}
+
+/**
+ * Returns the settings that run `multiplier` × real time in steps of a manual `timeStep`:
+ * the iteration count changes instead, so the step count a second does too.
+ */
+export function settingsForTimeStep(multiplier: number, timeStep: number) {
+  return {
+    timeStep,
+    speed: roundSetting(multiplier / (STEPS_PER_SPEED_UNIT * timeStep)),
+    isTimeStepManual: true,
   };
 }
 
@@ -226,30 +249,46 @@ export function cloneElement(element: CircuitElement) {
 
 /**
  * Returns the `$` line that starts a circuit file, as Falstad writes it. The 50 and 5e-11
- * after the voltage range are Falstad settings Lunar Spice does not use.
+ * after the voltage range are Falstad settings Lunar Spice does not use. A manual time
+ * step adds a 1 after them, behind `EXTENDED_FORMAT_FLAG`.
  */
 export function settingsLine(settings: Partial<SimulationSettings> = {}) {
-  const { timeStep, speed, currentSpeed, voltageRange } = {
+  const { timeStep, speed, currentSpeed, voltageRange, isTimeStepManual } = {
     ...DEFAULT_SETTINGS,
     ...settings,
   };
 
-  return `$ 1 ${timeStep} ${speed} ${currentSpeed} ${voltageRange} 50 5e-11`;
+  const line = `${timeStep} ${speed} ${currentSpeed} ${voltageRange} 50 5e-11`;
+
+  return isTimeStepManual
+    ? `$ ${1 | EXTENDED_FORMAT_FLAG} ${line} 1`
+    : `$ 1 ${line}`;
 }
 
 /** Reads the settings from a `$` line's tokens, with defaults for any it lacks. */
 function settingsFromLine(tokens: readonly string[]): SimulationSettings {
   const reader = new TokenReader(tokens.slice(1));
 
-  // Skip the first value, Falstad's option flags.
-  reader.number(1);
+  const flags = reader.number(1);
 
   const settings = {
     timeStep: reader.number(DEFAULT_SETTINGS.timeStep),
     speed: reader.number(DEFAULT_SETTINGS.speed),
     currentSpeed: reader.number(DEFAULT_SETTINGS.currentSpeed),
     voltageRange: reader.number(DEFAULT_SETTINGS.voltageRange),
+    isTimeStepManual: false,
   };
+
+  if (flags & EXTENDED_FORMAT_FLAG) {
+    // Skip the two Falstad settings Lunar Spice does not use.
+    reader.number(0);
+    reader.number(0);
+    settings.isTimeStepManual = reader.number(0) === 1;
+  }
+
+  if (settings.isTimeStepManual) {
+    return settings;
+  }
 
   // The file's speed sets how fast circuit time runs; the time step becomes the automatic
   // one, which keeps that speed and sizes the steps to it.
