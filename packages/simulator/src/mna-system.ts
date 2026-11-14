@@ -7,6 +7,26 @@ import { LuMatrix } from "./matrix";
  */
 export type AnalysisMode = "transient" | "dc";
 
+/** SPICE's RELTOL for a nonlinear model's current: 0.1 %. */
+const CURRENT_RELTOL = 1e-3;
+
+/** SPICE's ABSTOL for a nonlinear model's current: 1 pA. */
+const CURRENT_ABSTOL = 1e-12;
+
+/**
+ * True while a nonlinear model has not converged: the current its last linearization
+ * predicts at the new solution misses the model's current there by more than SPICE's
+ * tolerance. A device that only moved along its line, as a saturated or linear one does,
+ * counts as converged however far it moved.
+ */
+export function mispredicts(current: number, predicted: number) {
+  return (
+    Math.abs(current - predicted) >
+    CURRENT_RELTOL * Math.max(Math.abs(current), Math.abs(predicted)) +
+      CURRENT_ABSTOL
+  );
+}
+
 /**
  * The modified nodal analysis system for one netlist. Unknowns are numbered as Falstad
  * does: node 0 is ground and is never a row, nodes 1..n-1 are node voltages, and

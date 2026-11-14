@@ -11,16 +11,22 @@ export class LuMatrix {
   readonly pivots: Int32Array;
   /** The column whose pivot vanished in the last failed factorization; -1 after success. */
   singularColumn = -1;
+  /** Scratch: the columns right of the pivot where the pivot row is nonzero. */
+  private readonly pivotColumns: Int32Array;
 
   constructor(size: number) {
     this.size = size;
     this.values = new Float64Array(size * size);
     this.pivots = new Int32Array(size);
+    this.pivotColumns = new Int32Array(size);
   }
 
-  /** Factors `source` (row-major, `size` squared); false when it is singular. */
+  /**
+   * Factors `source` (row-major, `size` squared); false when it is singular. MNA matrices
+   * are mostly zeros, so each elimination touches only the pivot row's nonzero columns.
+   */
   factor(source: Float64Array) {
-    const { size, values, pivots } = this;
+    const { size, values, pivots, pivotColumns } = this;
 
     values.set(source);
     this.singularColumn = -1;
@@ -60,21 +66,33 @@ export class LuMatrix {
       }
 
       // Eliminate below the pivot; each factor stays in the L slot it clears.
-      const pivot = values[column * size + column] ?? 1;
+      const pivotStart = column * size;
+      const pivot = values[pivotStart + column] ?? 1;
+      let nonzeroCount = 0;
+
+      for (let index = column + 1; index < size; index += 1) {
+        if (values[pivotStart + index] !== 0) {
+          pivotColumns[nonzeroCount] = index;
+          nonzeroCount += 1;
+        }
+      }
 
       for (let row = column + 1; row < size; row += 1) {
-        const factor = (values[row * size + column] ?? 0) / pivot;
+        const rowStart = row * size;
+        const factor = (values[rowStart + column] ?? 0) / pivot;
 
-        values[row * size + column] = factor;
+        values[rowStart + column] = factor;
 
         if (factor === 0) {
           continue;
         }
 
-        for (let index = column + 1; index < size; index += 1) {
-          values[row * size + index] =
-            (values[row * size + index] ?? 0) -
-            factor * (values[column * size + index] ?? 0);
+        for (let nonzero = 0; nonzero < nonzeroCount; nonzero += 1) {
+          const index = pivotColumns[nonzero] ?? 0;
+
+          values[rowStart + index] =
+            (values[rowStart + index] ?? 0) -
+            factor * (values[pivotStart + index] ?? 0);
         }
       }
     }

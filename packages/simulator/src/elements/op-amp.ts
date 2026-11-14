@@ -11,7 +11,7 @@ import {
   type Point,
   roundPoint,
 } from "../geometry";
-import type { AcSystem, MnaSystem } from "../mna-system";
+import { type AcSystem, mispredicts, type MnaSystem } from "../mna-system";
 import { ParamSet, type ParamSpec, type Preset } from "../params";
 import { formatSi } from "../units";
 
@@ -187,6 +187,9 @@ export class OpAmp extends CircuitElement {
   /** The capacitor that sets the dominant pole. */
   readonly pole = new CompanionCapacitor(0);
   private lastInputDifference = 0;
+  /** The input stage's current and slope at `lastInputDifference`, as last stamped. */
+  private lastStageCurrent = 0;
+  private lastStageConductance = 0;
   /** Which swing limit holds the pole node: 1 high, -1 low, 0 neither. */
   private limit = 0;
 
@@ -350,10 +353,16 @@ export class OpAmp extends CircuitElement {
     const current = maxCurrent * ratio;
     const conductance = gain * (1 - ratio * ratio);
 
-    // Newton has not converged while the input difference moves more than 1 µV.
-    if (Math.abs(difference - this.lastInputDifference) > 1e-6) {
+    const predicted =
+      this.lastStageCurrent +
+      this.lastStageConductance * (difference - this.lastInputDifference);
+
+    if (mispredicts(current, predicted)) {
       system.converged = false;
     }
+
+    this.lastStageCurrent = current;
+    this.lastStageConductance = conductance;
 
     // The stage pushes `current` into the pole node: a negative current leaving it.
     system.stampMatrix(poleNode, this.node(1), -conductance);
@@ -457,6 +466,8 @@ export class OpAmp extends CircuitElement {
   override reset() {
     super.reset();
     this.lastInputDifference = 0;
+    this.lastStageCurrent = 0;
+    this.lastStageConductance = 0;
     this.limit = 0;
     this.pole.reset();
   }

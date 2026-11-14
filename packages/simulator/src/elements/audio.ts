@@ -1,5 +1,5 @@
 import { CircuitElement, type EditField, type TokenReader } from "../element";
-import type { AcSystem, MnaSystem } from "../mna-system";
+import { type AcSystem, mispredicts, type MnaSystem } from "../mna-system";
 import { ParamSet, type ParamSpec, type Preset } from "../params";
 import { formatSi } from "../units";
 
@@ -16,9 +16,6 @@ type SoundInput = (typeof SOUND_INPUTS)[number]["value"];
  * the current falls toward zero, as when the bias supply is missing.
  */
 const KNEE_VOLTAGE = 0.4;
-
-/** Newton keeps iterating while the terminal voltage moves more than this. */
-const VOLTAGE_TOLERANCE = 1e-4;
 
 const MICROPHONE_SPECS: readonly ParamSpec[] = [
   {
@@ -82,7 +79,10 @@ export class Microphone extends CircuitElement {
    * simulation; null in analyses.
    */
   liveInput: ((time: number) => number) | null = null;
+  /** The terminal voltage, current and slope as last stamped. */
   private lastVoltage = 0;
+  private lastCurrent = 0;
+  private lastConductance = 0;
 
   static override read(
     x1: number,
@@ -159,16 +159,21 @@ export class Microphone extends CircuitElement {
   override stampStep(system: MnaSystem) {
     const voltage = this.voltageDifference();
 
-    if (Math.abs(voltage - this.lastVoltage) > VOLTAGE_TOLERANCE) {
-      system.converged = false;
-    }
-
-    this.lastVoltage = voltage;
-
     const { current, conductance } = this.model(
       voltage,
       this.drainCurrent(system),
     );
+
+    const predicted =
+      this.lastCurrent + this.lastConductance * (voltage - this.lastVoltage);
+
+    if (mispredicts(current, predicted)) {
+      system.converged = false;
+    }
+
+    this.lastVoltage = voltage;
+    this.lastCurrent = current;
+    this.lastConductance = conductance;
 
     system.stampConductance(this.node(0), this.node(1), conductance);
     system.stampCurrentSource(
@@ -198,6 +203,8 @@ export class Microphone extends CircuitElement {
   override reset() {
     super.reset();
     this.lastVoltage = 0;
+    this.lastCurrent = 0;
+    this.lastConductance = 0;
   }
 
   override info() {

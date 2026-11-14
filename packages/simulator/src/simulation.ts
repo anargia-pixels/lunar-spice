@@ -1,4 +1,4 @@
-import type { CircuitElement } from "./element";
+import { CircuitElement } from "./element";
 import { pointKey } from "./geometry";
 import { type AnalysisMode, MnaSystem } from "./mna-system";
 import { buildNetlist, type Netlist } from "./netlist";
@@ -9,8 +9,12 @@ import { buildNetlist, type Netlist } from "./netlist";
  */
 const NODE_GMIN = 1e-12;
 
-/** Newton iterations allowed for one time step before it counts as failed. */
-const MAX_STEP_ITERATIONS = 100;
+/**
+ * Newton iterations allowed for one time step before it counts as failed and is solved
+ * in smaller steps. Like SPICE's ITL4, it stays low: a step stuck cycling between pieces
+ * of a model gets through sooner in smaller steps than by iterating on.
+ */
+const MAX_STEP_ITERATIONS = 20;
 
 /** How many equal parts a time step that fails to converge is retried in. */
 const STEP_DIVISIONS = 4;
@@ -26,6 +30,14 @@ const SINGULAR_MESSAGE =
 
 const CONVERGENCE_MESSAGE =
   "The simulation did not converge. Check for unrealistic component values.";
+
+/** True when `element` does something in `hook`; wires and the like keep the empty default. */
+function overrides(
+  element: CircuitElement,
+  hook: "startStep" | "stampStep" | "finishStep",
+) {
+  return element[hook] !== CircuitElement.prototype[hook];
+}
 
 /** A wire-like element's place in the wire network around one point. */
 type ConductorEdge = {
@@ -236,6 +248,19 @@ export class Simulation {
   private readonly divisionDepth: number;
   /** Solves this one's failed steps in smaller ones; built on the first failure. */
   private finer: Simulation | null = null;
+  /**
+   * The elements that do something in each step hook or own a branch. Steps visit only
+   * these, so the wires that make up most of a schematic cost nothing per step.
+   */
+  private readonly starting: readonly CircuitElement[];
+  private readonly stamping: readonly CircuitElement[];
+  private readonly finishing: readonly CircuitElement[];
+  private readonly branched: readonly CircuitElement[];
+  /** Each element's `nodes` and `volts`, read once so solves write voltages directly. */
+  private readonly postVoltages: readonly {
+    nodes: readonly number[];
+    volts: number[];
+  }[];
 
   constructor(
     elements: readonly CircuitElement[],
@@ -256,6 +281,17 @@ export class Simulation {
     this.hasNonlinear = elements.some((element) => element.isNonlinear());
     this.conductorCurrents = new ConductorCurrents(elements);
     this.previousSolution = new Float64Array(this.system.solution.length);
+    this.starting = elements.filter((element) =>
+      overrides(element, "startStep"),
+    );
+    this.stamping = elements.filter((element) =>
+      overrides(element, "stampStep"),
+    );
+    this.finishing = elements.filter((element) =>
+      overrides(element, "finishStep"),
+    );
+    this.branched = elements.filter((element) => element.branchCount(mode) > 0);
+    this.postVoltages = elements.map(({ nodes, volts }) => ({ nodes, volts }));
     this.stampBase();
 
     // Seed the solution with the elements' last voltages for a warm start.
@@ -289,9 +325,9 @@ export class Simulation {
 
   /** Copies node voltages from the solution onto each element's posts. */
   private applySolution() {
-    for (const element of this.elements) {
-      for (let post = 0; post < element.nodes.length; post += 1) {
-        element.volts[post] = this.system.value(element.nodes[post] ?? 0);
+    for (const { nodes, volts } of this.postVoltages) {
+      for (let post = 0; post < nodes.length; post += 1) {
+        volts[post] = this.system.value(nodes[post] ?? 0);
       }
     }
   }
@@ -328,7 +364,7 @@ export class Simulation {
       unsettled = [];
 
       // Stamp each element and note the ones whose linearization point still moves.
-      for (const element of this.elements) {
+      for (const element of this.stamping) {
         system.converged = true;
         element.stampStep(system);
 
@@ -363,7 +399,7 @@ export class Simulation {
 
   /** Gives elements their branch currents, finishes their step, then finds wire currents. */
   private finish() {
-    for (const element of this.elements) {
+    for (const element of this.branched) {
       const count = element.branchCount(this.mode);
 
       for (let index = 0; index < count; index += 1) {
@@ -376,7 +412,7 @@ export class Simulation {
       }
     }
 
-    for (const element of this.elements) {
+    for (const element of this.finishing) {
       element.finishStep(this.system);
     }
 
@@ -395,7 +431,7 @@ export class Simulation {
     this.system.time = this.time + this.system.timeStep;
     this.previousSolution.set(this.system.solution);
 
-    for (const element of this.elements) {
+    for (const element of this.starting) {
       element.startStep(this.system);
     }
 

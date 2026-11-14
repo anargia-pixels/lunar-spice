@@ -374,7 +374,8 @@ export abstract class CircuitElement {
   /** Clears state such as stored charge, as when the simulation resets. */
   reset() {
     this.current = 0;
-    this.volts = this.volts.map(() => 0);
+    // In place: a simulation holds on to each element's `volts`.
+    this.volts.fill(0);
   }
 
   /** Returns the current that flows from the node into the element at `post`. */
