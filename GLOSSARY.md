@@ -35,6 +35,12 @@ A one-shot run in the worker: DC operating point, AC sweep or transient.
 **Scope**:
 A live plot of one element's voltage and current during the interactive simulation.
 
+**Oscilloscope**:
+A part wired into the circuit with four channels read against its COM post, whose
+front panel (scales, trigger, measurements, cursors) shows in the results panel and
+saves with the circuit.
+_Avoid_: scope, for this part
+
 **Trace**:
 One plotted quantity in an analysis result, such as `V(out)` or `I(R1)`.
 <!-- prettier-ignore-end -->

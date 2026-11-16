@@ -5,6 +5,7 @@ import {
   OperatingPointResults,
   TransientResults,
 } from "@lunar-spice/components/analysis/analysis-results";
+import { OscilloscopeView } from "@lunar-spice/components/plots/oscilloscope-view";
 import { ScopeView } from "@lunar-spice/components/plots/scope-view";
 import { Button } from "@lunar-spice/components/ui/button";
 import { Spinner } from "@lunar-spice/components/ui/spinner";
@@ -62,7 +63,7 @@ function AnalysisContent() {
 }
 
 /**
- * Live scopes and the latest analysis result. It fills the panel under the canvas, which
+ * Live scopes, the oscilloscopes' front panels and the latest analysis result. It fills the panel under the canvas, which
  * the editor page sizes and only shows while results are open.
  */
 export function ResultsPanel() {
@@ -70,6 +71,7 @@ export function ResultsPanel() {
   const tab = useSimulationStore((state) => state.resultsTab);
   const setTab = useSimulationStore((state) => state.setResultsTab);
   const scopes = useSimulationStore((state) => state.scopes);
+  const oscilloscopes = useSimulationStore((state) => state.oscilloscopes);
   const result = useSimulationStore((state) => state.result);
   const editor = useSimulationStore((state) => state.editor);
 
@@ -81,7 +83,11 @@ export function ResultsPanel() {
       <Tabs
         value={tab}
         onValueChange={(next) => {
-          if (next === "scopes" || next === "analysis") {
+          if (
+            next === "oscilloscopes" ||
+            next === "scopes" ||
+            next === "analysis"
+          ) {
             setTab(next satisfies ResultsTab);
           }
         }}
@@ -95,6 +101,10 @@ export function ResultsPanel() {
               label={result ? ANALYSIS_LABELS[result.kind] : "Analysis"}
             />
             <TabItem value="scopes" label={`Scopes ${scopes.length}`} />
+            <TabItem
+              value="oscilloscopes"
+              label={`Oscilloscopes ${oscilloscopes.length}`}
+            />
           </TabsList>
           <Button
             variant="ghost"
@@ -106,7 +116,7 @@ export function ResultsPanel() {
           </Button>
         </div>
         <div className="min-h-0 flex-1">
-          {tab === "scopes" ? (
+          {tab === "scopes" && (
             <ScopeView
               scopes={scopes}
               onRemove={(id) => editor?.removeScope(id)}
@@ -114,9 +124,16 @@ export function ResultsPanel() {
                 editor?.updateScope(id, settings)
               }
             />
-          ) : (
-            <AnalysisContent />
           )}
+          {tab === "oscilloscopes" && (
+            <OscilloscopeView
+              oscilloscopes={oscilloscopes}
+              onSettingsChange={(id, settings) =>
+                editor?.updateOscilloscope(id, settings)
+              }
+            />
+          )}
+          {tab === "analysis" && <AnalysisContent />}
         </div>
       </Tabs>
     </section>

@@ -51,6 +51,7 @@ import {
   useState,
 } from "react";
 
+import type { OscilloscopeEntry } from "../../lib/oscilloscope-feed";
 import { ADD_TO_SCOPE_LABEL, type Scope } from "../../lib/scope";
 import { comboLabel, type ShortcutSection } from "../../lib/shortcuts";
 import {
@@ -294,6 +295,7 @@ export function CircuitEditor({
   onChange,
   onStatus,
   onScopesChange,
+  onOscilloscopesChange,
 }: {
   circuitKey: string;
   text: string;
@@ -309,6 +311,7 @@ export function CircuitEditor({
   onChange: (text: string) => void;
   onStatus: (status: SimulationStatus) => void;
   onScopesChange: (scopes: readonly Scope[]) => void;
+  onOscilloscopesChange: (oscilloscopes: readonly OscilloscopeEntry[]) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -337,6 +340,7 @@ export function CircuitEditor({
     onChange,
     onStatus,
     onScopesChange,
+    onOscilloscopesChange,
     onControllerChange,
   });
 
@@ -347,6 +351,7 @@ export function CircuitEditor({
       onChange,
       onStatus,
       onScopesChange,
+      onOscilloscopesChange,
       onControllerChange,
     };
   });
@@ -372,6 +377,8 @@ export function CircuitEditor({
         onEditRequest: setEditing,
         onInfo: setInfo,
         onScopesChange: (scopes) => latest.current.onScopesChange(scopes),
+        onOscilloscopesChange: (oscilloscopes) =>
+          latest.current.onOscilloscopesChange(oscilloscopes),
         onHelpRequest: () => setIsHelpOpen(true),
         onClipboardError: (title) =>
           toast.add({

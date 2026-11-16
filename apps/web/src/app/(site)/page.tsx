@@ -21,7 +21,7 @@ const FEATURES = [
   {
     title: "Watch it run",
     description:
-      "A real-time simulation colors every wire by its voltage and moves dots with the current. Click switches, press buttons and add live scopes while it runs, from 1/1000× to 1000× real time.",
+      "A real-time simulation colors every wire by its voltage and moves dots with the current. Click switches, press buttons, add live scopes or wire in a four-channel oscilloscope while it runs, from 1/1000× to 1000× real time.",
   },
   {
     title: "Analyses from Multisim",

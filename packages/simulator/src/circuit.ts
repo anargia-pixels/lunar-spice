@@ -21,6 +21,7 @@ import {
   FixedRegulator,
 } from "./elements/integrated-circuits";
 import { OpAmp } from "./elements/op-amp";
+import { Oscilloscope } from "./elements/oscilloscope";
 import {
   Capacitor,
   Inductor,
@@ -159,6 +160,7 @@ const ELEMENT_CLASSES: Record<ElementKind, ElementClass> = {
   timer: Timer555,
   microphone: Microphone,
   speaker: Speaker,
+  oscilloscope: Oscilloscope,
 };
 
 /**

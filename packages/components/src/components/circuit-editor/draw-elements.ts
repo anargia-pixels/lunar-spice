@@ -16,6 +16,10 @@ import {
 } from "@lunar-spice/simulator/elements/integrated-circuits";
 import { OpAmp } from "@lunar-spice/simulator/elements/op-amp";
 import {
+  OSCILLOSCOPE_PINS,
+  OSCILLOSCOPE_SIZE,
+} from "@lunar-spice/simulator/elements/oscilloscope";
+import {
   Potentiometer,
   VariableResistor,
 } from "@lunar-spice/simulator/elements/passive";
@@ -35,7 +39,12 @@ import {
 } from "@lunar-spice/simulator/geometry";
 import type { Bounds } from "@lunar-spice/simulator/layout";
 
-import { type CanvasPalette, mixRgb, rgbText } from "../../lib/canvas-palette";
+import {
+  type CanvasPalette,
+  mixRgb,
+  rgbText,
+  traceColor,
+} from "../../lib/canvas-palette";
 import { DOT_SPACING } from "./current-dots";
 import type { DisplayOptions } from "./display-options";
 
@@ -175,6 +184,7 @@ export class SchematicPainter {
     regulator: (element) => this.drawRegulator(element),
     "adjustable-regulator": (element) => this.drawRegulator(element),
     timer: (element) => this.drawTimer(element),
+    oscilloscope: (element) => this.drawOscilloscope(element),
   };
   /** The current along each path of the element being drawn. */
   private pathCurrents: readonly number[] = [];
@@ -1439,6 +1449,74 @@ export class SchematicPainter {
           element,
           content,
           { x: x + TIMER_SIZE.width / 2, y: y + 56 + line * 11 },
+          "center",
+          9,
+        ),
+      );
+    }
+  }
+
+  /**
+   * A bench oscilloscope: a box with a screen showing a sine, the channel inputs down
+   * its left side and COM underneath.
+   */
+  private drawOscilloscope(element: CircuitElement) {
+    const { context } = this;
+    const x = element.x1;
+    const y = element.y1;
+    const { width, height } = OSCILLOSCOPE_SIZE;
+    const screen = { x: x + 24, y: y + 12, width: 92, height: 60 };
+
+    context.strokeStyle = this.outlineColor();
+    context.beginPath();
+    context.roundRect(x, y, width, height, 3);
+    context.roundRect(screen.x, screen.y, screen.width, screen.height, 2);
+    context.stroke();
+
+    // One cycle and a half of a sine across the screen.
+    context.beginPath();
+
+    for (let step = 0; step <= 48; step += 1) {
+      const fraction = step / 48;
+      const px = screen.x + 8 + fraction * (screen.width - 16);
+
+      const py =
+        screen.y +
+        screen.height / 2 -
+        (screen.height / 3) * Math.sin(fraction * 3 * Math.PI);
+
+      if (step === 0) {
+        context.moveTo(px, py);
+      } else {
+        context.lineTo(px, py);
+      }
+    }
+
+    context.strokeStyle = this.look.accent ?? traceColor(this.palette, 0);
+    context.stroke();
+
+    const posts = element.posts();
+
+    OSCILLOSCOPE_PINS.forEach((pin, index) => {
+      const post = posts[index] ?? { x: x + pin.x, y: y + pin.y };
+      const isSide = post.x < x;
+      const edge = isSide ? { x, y: post.y } : { x: post.x, y: y + height };
+
+      const label = isSide
+        ? { x: edge.x + 4, y: edge.y }
+        : { x: edge.x, y: edge.y - 8 };
+
+      this.line(post, edge, this.voltageColor(element.volts[index] ?? 0));
+      this.text(pin.name, label, isSide ? "left" : "center", 7);
+      this.dots([post, edge], index);
+    });
+
+    if (this.options.showValues) {
+      labelLines(element).forEach((content, line) =>
+        this.partLabel(
+          element,
+          content,
+          { x: x + 72, y: y + 92 + line * 11 },
           "center",
           9,
         ),

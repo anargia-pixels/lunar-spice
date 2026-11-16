@@ -12,6 +12,10 @@ import type {
   ElementKind,
 } from "@lunar-spice/simulator/element";
 import {
+  Oscilloscope,
+  type OscilloscopeSettings,
+} from "@lunar-spice/simulator/elements/oscilloscope";
+import {
   GRID_SIZE,
   type Point,
   pointKey,
@@ -33,6 +37,7 @@ import {
 } from "@lunar-spice/simulator/wiring";
 
 import { canvasPalette, watchPalette } from "../../lib/canvas-palette";
+import type { OscilloscopeEntry } from "../../lib/oscilloscope-feed";
 import type { Scope, ScopeSettings } from "../../lib/scope";
 import { AttachedWires } from "./attached-wires";
 import { Camera, type Insets } from "./camera";
@@ -65,6 +70,8 @@ export type EditorCallbacks = {
   /** Readout lines for the hovered or selected element; null when there is none. */
   onInfo: (lines: string[] | null) => void;
   onScopesChange: (scopes: readonly Scope[]) => void;
+  /** After an oscilloscope comes, goes, is renamed or has its front panel changed. */
+  onOscilloscopesChange: (oscilloscopes: readonly OscilloscopeEntry[]) => void;
   /** Whether the circuit has no elements yet, so the canvas can say how to start. */
   onEmptyChange: (isEmpty: boolean) => void;
   /** How many posts join nothing, which is how a circuit most often comes out wrong. */
@@ -255,6 +262,7 @@ export class EditorController {
     this.run = new InteractiveRun({
       onStatus: callbacks.onStatus,
       onScopesChange: callbacks.onScopesChange,
+      onOscilloscopesChange: callbacks.onOscilloscopesChange,
     });
     this.painter = new SchematicPainter(context, this.drawOptions());
     this.attach();
@@ -407,9 +415,29 @@ export class EditorController {
     return true;
   }
 
-  /** Goes back to the elements in `snapshot`, keeping the simulation settings. */
+  /**
+   * Goes back to the elements in `snapshot`, keeping the simulation settings and each
+   * oscilloscope's front panel, which stay out of the history alike.
+   */
   private restore(snapshot: Snapshot) {
+    const panels = new Map(
+      this.circuit.elements.flatMap((element) =>
+        element instanceof Oscilloscope
+          ? [[element.id, element.settings] as const]
+          : [],
+      ),
+    );
+
     this.circuit.elements = restoreSnapshot(snapshot);
+
+    for (const element of this.circuit.elements) {
+      const settings = panels.get(element.id);
+
+      if (element instanceof Oscilloscope && settings) {
+        element.settings = settings;
+      }
+    }
+
     this.clearInteraction();
     this.commit();
   }
@@ -438,6 +466,22 @@ export class EditorController {
     this.circuit.settings = { ...this.circuit.settings, ...settings };
     this.run.updateSettings();
     this.updatePainter();
+    this.callbacks.onChange(this.circuit.dump());
+  }
+
+  /**
+   * Changes an oscilloscope's front panel, which its file line stores. Knobs turn many
+   * times a second, so like the simulation settings it stays out of the undo history.
+   */
+  updateOscilloscope(elementId: number, settings: OscilloscopeSettings) {
+    const element = this.circuit.elements.find(({ id }) => id === elementId);
+
+    if (!(element instanceof Oscilloscope)) {
+      return;
+    }
+
+    element.settings = settings;
+    this.run.updateOscilloscopes();
     this.callbacks.onChange(this.circuit.dump());
   }
 

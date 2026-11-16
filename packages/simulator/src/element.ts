@@ -30,7 +30,8 @@ export type ElementKind =
   | "adjustable-regulator"
   | "timer"
   | "microphone"
-  | "speaker";
+  | "speaker"
+  | "oscilloscope";
 
 /** Which numbers a value accepts: above 0, 0 and above (0 turns it off), or any. */
 export type ValueRange = "positive" | "nonnegative" | "any";

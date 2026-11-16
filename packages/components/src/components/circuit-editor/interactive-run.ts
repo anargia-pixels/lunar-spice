@@ -1,9 +1,15 @@
 import { voltageName } from "@lunar-spice/simulator/analyses";
 import { type Circuit, speedMultiplier } from "@lunar-spice/simulator/circuit";
 import type { CircuitElement } from "@lunar-spice/simulator/element";
+import { Oscilloscope } from "@lunar-spice/simulator/elements/oscilloscope";
 import { type Point, pointKey } from "@lunar-spice/simulator/geometry";
 import { buildNetlist, type Netlist } from "@lunar-spice/simulator/netlist";
 
+import {
+  createFeed,
+  type OscilloscopeEntry,
+  type OscilloscopeFeed,
+} from "../../lib/oscilloscope-feed";
 import {
   clearScope,
   createScope,
@@ -14,7 +20,12 @@ import {
 import { AudioIo } from "./audio-io";
 import { CurrentDots } from "./current-dots";
 import { mergeState } from "./element-state";
-import type { FromWorker, ScopeData, ToWorker } from "./run-protocol";
+import type {
+  FromWorker,
+  OscilloscopeData,
+  ScopeData,
+  ToWorker,
+} from "./run-protocol";
 import { INITIAL_STATUS, type SimulationStatus } from "./simulation-status";
 
 /** While only the time moves, the status is reported at most this often. */
@@ -48,9 +59,35 @@ function mergeScope(scope: Scope, data: ScopeData) {
   mergeState(scope.meter, data.meter);
 }
 
+/** Copies what an oscilloscope recorded in the worker into its feed. */
+function mergeOscilloscope(
+  feed: OscilloscopeFeed,
+  data: OscilloscopeData,
+  time: number,
+) {
+  feed.live = data.live;
+  feed.time = time;
+  feed.lastTrigger = data.lastTrigger;
+
+  if (data.triggered) {
+    feed.triggered = data.triggered;
+    feed.triggerCount += 1;
+  }
+
+  data.meters.forEach((patch, channel) => {
+    const meter = feed.meters[channel];
+
+    if (meter) {
+      mergeState(meter, patch);
+    }
+  });
+  feed.version += 1;
+}
+
 export type RunCallbacks = {
   onStatus: (status: SimulationStatus) => void;
   onScopesChange: (scopes: readonly Scope[]) => void;
+  onOscilloscopesChange: (oscilloscopes: readonly OscilloscopeEntry[]) => void;
 };
 
 /**
@@ -74,6 +111,10 @@ export class InteractiveRun {
   private lastStatus: SimulationStatus | null = null;
   private lastStatusTime = 0;
   private scopes: Scope[] = [];
+  /** What each oscilloscope recorded, by element id. */
+  private feeds = new Map<number, OscilloscopeFeed>();
+  /** The oscilloscopes as last reported, to report only changes. */
+  private reportedOscilloscopes = "";
   /** Elements by id, so snapshots and scopes find theirs. */
   private elementsById = new Map<number, CircuitElement>();
   private readonly dots = new CurrentDots();
@@ -188,6 +229,7 @@ export class InteractiveRun {
       this.setScopes(scopes);
     }
 
+    this.updateOscilloscopes();
     this.updateAudio();
     this.emitStatus(true);
   }
@@ -206,6 +248,12 @@ export class InteractiveRun {
 
     for (const scope of this.scopes) {
       clearScope(scope);
+    }
+
+    for (const feed of this.feeds.values()) {
+      feed.live = null;
+      feed.triggered = null;
+      feed.version += 1;
     }
 
     this.rebuild(circuit, true);
@@ -305,6 +353,14 @@ export class InteractiveRun {
       }
     }
 
+    for (const data of snapshot.oscilloscopes) {
+      const feed = this.feeds.get(data.elementId);
+
+      if (feed) {
+        mergeOscilloscope(feed, data, snapshot.time);
+      }
+    }
+
     for (const data of snapshot.scopes) {
       const scope = this.scopes.find(
         (candidate) => candidate.elementId === data.elementId,
@@ -394,6 +450,62 @@ export class InteractiveRun {
     if (scope) {
       updateScope(scope, settings);
       this.setScopes([...this.scopes]);
+    }
+  }
+
+  /**
+   * Sends the worker every oscilloscope's front panel, and reports the oscilloscopes when
+   * one came, went, was renamed or had its front panel changed.
+   */
+  updateOscilloscopes() {
+    const oscilloscopes =
+      this.circuit?.elements.filter(
+        (element): element is Oscilloscope => element instanceof Oscilloscope,
+      ) ?? [];
+
+    const feeds = new Map(
+      oscilloscopes.map(({ id, settings }) => {
+        const feed = this.feeds.get(id) ?? createFeed();
+
+        // A trace recorded at another time base would draw at the wrong scale.
+        if (feed.secondsPerDivision !== settings.secondsPerDivision) {
+          feed.secondsPerDivision = settings.secondsPerDivision;
+          feed.live = null;
+          feed.triggered = null;
+          feed.version += 1;
+        }
+
+        return [id, feed];
+      }),
+    );
+
+    this.feeds = feeds;
+    this.send({
+      kind: "oscilloscopes",
+      oscilloscopes: oscilloscopes.map(({ id, settings }) => ({
+        elementId: id,
+        settings,
+      })),
+    });
+
+    const entries = oscilloscopes.map((oscilloscope) => ({
+      elementId: oscilloscope.id,
+      title: oscilloscope.title(),
+      settings: oscilloscope.settings,
+      feed: feeds.get(oscilloscope.id) ?? createFeed(),
+    }));
+
+    const reported = JSON.stringify(
+      entries.map(({ elementId, title, settings }) => [
+        elementId,
+        title,
+        settings,
+      ]),
+    );
+
+    if (reported !== this.reportedOscilloscopes) {
+      this.reportedOscilloscopes = reported;
+      this.callbacks.onOscilloscopesChange(entries);
     }
   }
 

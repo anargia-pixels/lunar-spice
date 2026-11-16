@@ -5,9 +5,11 @@ import {
   speedMultiplier,
 } from "@lunar-spice/simulator/circuit";
 import type { CircuitElement } from "@lunar-spice/simulator/element";
+import { Oscilloscope } from "@lunar-spice/simulator/elements/oscilloscope";
 import { SignalMeter } from "@lunar-spice/simulator/signal-meter";
 import { Simulation } from "@lunar-spice/simulator/simulation";
 
+import { OscilloscopeRecorder } from "../../lib/oscilloscope";
 import {
   clearScope,
   createScope,
@@ -24,6 +26,7 @@ import {
 import type {
   FromWorker,
   LoadedElement,
+  OscilloscopeRequest,
   ScopeRequest,
   SoundSettings,
 } from "./run-protocol";
@@ -61,6 +64,12 @@ type Probe = {
   element: CircuitElement;
 };
 
+/** An oscilloscope's recorder and the oscilloscope it records. */
+type Acquisition = {
+  recorder: OscilloscopeRecorder;
+  oscilloscope: Oscilloscope;
+};
+
 /**
  * The interactive simulation without the editor: it rebuilds the circuit from file lines,
  * steps it in real time at the set speed, records scopes, makes sound, and reports what
@@ -81,10 +90,13 @@ export class RunEngine {
   private stepRemainder = 0;
   private scopes: Scope[] = [];
   private byId = new Map<number, CircuitElement>();
-  /** The elements the scopes watch, in scope order. */
+  private recorders: OscilloscopeRecorder[] = [];
+  /** The elements the scopes and oscilloscopes watch, which need every step. */
   private scoped: CircuitElement[] = [];
   /** Each scope with the element it watches, for recording every step. */
   private probes: Probe[] = [];
+  /** Each recorder with its oscilloscope, for recording every step. */
+  private acquisitions: Acquisition[] = [];
   private readonly sound = new RunSound();
 
   /** True while it has a circuit to step: running and without an error. */
@@ -152,6 +164,10 @@ export class RunEngine {
       for (const scope of this.scopes) {
         clearScope(scope);
       }
+
+      for (const recorder of this.recorders) {
+        recorder.restart();
+      }
     }
 
     this.settings = settings;
@@ -187,6 +203,10 @@ export class RunEngine {
 
     if (isNewStep) {
       this.rebuild();
+
+      for (const recorder of this.recorders) {
+        recorder.retime(settings.timeStep);
+      }
     }
   }
 
@@ -211,13 +231,46 @@ export class RunEngine {
     this.updateScoped();
   }
 
+  /**
+   * Follows the schematic's oscilloscopes: new ones start empty, kept ones keep their
+   * recording unless their time base changed.
+   */
+  setOscilloscopes(requests: readonly OscilloscopeRequest[]) {
+    const timeStep = this.settings?.timeStep ?? 1;
+
+    this.recorders = requests.map(({ elementId, settings }) => {
+      const recorder = this.recorders.find(
+        (candidate) => candidate.elementId === elementId,
+      );
+
+      if (!recorder) {
+        return new OscilloscopeRecorder(elementId, settings, timeStep);
+      }
+
+      recorder.configure(settings, timeStep);
+
+      return recorder;
+    });
+    this.updateScoped();
+  }
+
   private updateScoped() {
     this.probes = this.scopes.flatMap((scope) => {
       const element = this.byId.get(scope.elementId);
 
       return element ? [{ scope, element }] : [];
     });
-    this.scoped = this.probes.map(({ element }) => element);
+    this.acquisitions = this.recorders.flatMap((recorder) => {
+      const element = this.byId.get(recorder.elementId);
+
+      return element instanceof Oscilloscope
+        ? [{ recorder, oscilloscope: element }]
+        : [];
+    });
+    this.scoped = [
+      ...this.probes.map(({ element }) => element),
+      ...this.acquisitions.map(({ oscilloscope }) => oscilloscope),
+    ];
   }
 
   updateSound(settings: SoundSettings) {
@@ -272,6 +325,7 @@ export class RunEngine {
       if (scoped.length > 0) {
         simulation.updateIdleElementsAmong(scoped);
         this.recordScopes(timeStep);
+        this.recordOscilloscopes(simulation.time);
       }
 
       this.sound.pushStep(timeStep);
@@ -298,6 +352,12 @@ export class RunEngine {
         : element.voltageDifference();
 
       recordSample(scope, voltage, element.current, timeStep);
+    }
+  }
+
+  private recordOscilloscopes(time: number) {
+    for (const { recorder, oscilloscope } of this.acquisitions) {
+      recorder.record(oscilloscope, time);
     }
   }
 
@@ -328,6 +388,15 @@ export class RunEngine {
         timeStep: scope.timeStep,
         peakVoltage: scope.peakVoltage,
         meter: statePatch(scope.meter, PRISTINE_METER),
+      })),
+      oscilloscopes: this.recorders.map((recorder) => ({
+        elementId: recorder.elementId,
+        live: recorder.live(),
+        triggered: recorder.takeTriggered(),
+        lastTrigger: recorder.lastTrigger,
+        meters: recorder.meters.map((meter) =>
+          statePatch(meter, PRISTINE_METER),
+        ),
       })),
       sound: this.sound.take(),
     };

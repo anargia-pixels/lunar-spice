@@ -1,5 +1,7 @@
 /** What a signal meter reads over its latest window. */
 export type SignalReading = {
+  minimum: number;
+  maximum: number;
   peakToPeak: number;
   /** The average, as a DC voltmeter reads it. */
   dc: number;
@@ -54,6 +56,8 @@ function readWindow(window: Window, frequency: number | null): SignalReading {
   const { low, high, area, squareArea, duration } = window;
 
   return {
+    minimum: low,
+    maximum: high,
     peakToPeak: high - low,
     dc: area / duration,
     rms: Math.sqrt(Math.max(0, squareArea / duration)),

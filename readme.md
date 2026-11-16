@@ -5,7 +5,7 @@ An interactive circuit simulator for Linux, macOS and the web, in the spirit of
 run the analyses you would reach for in Multisim:
 
 - **Interactive**: real-time simulation with voltage colors, moving current dots,
-  clickable switches and live scopes.
+  clickable switches, live scopes and a four-channel oscilloscope.
 - **DC operating point**: every net voltage and every part's voltage, current and power.
 - **AC sweep**: gain and phase (Bode plots) from small-signal analysis around the
   operating point.
@@ -24,16 +24,19 @@ switch · diode and Zener · LED · NPN/PNP · N/P-channel MOSFET · N/P-channel
 (thresholds, output levels, output resistance, slew rate) · fixed regulator (7805-style) ·
 adjustable regulator (LM317-style) · 555 timer · electret microphone (live from your
 microphone, or a test tone) · speaker (plays through your speakers) · voltmeter · voltage
-probe (to ground, with V(p-p), V(rms), V(dc) and frequency, as in Multisim) · net label ·
-ground.
+probe (to ground, with V(p-p), V(rms), V(dc) and frequency, as in Multisim) · oscilloscope
+(four channels against COM) · net label · ground.
 
 Parts have a fixed size, as in Multisim: a click places one, and `[` `]`, H and V turn or
 mirror it before you click. Only wires stretch. A voltage probe rests on any wire or post
 and reads that net without changing the wiring, so it can be moved freely; its properties
-pick which readings it shows and their text size. The interactive simulation runs in real
-time by default; the speed slider steps from 1/1000× to 1000×, and microphones and
-speakers work at 1×. The time step follows the speed unless you turn off Automatic time
-step and set your own; the circuit file keeps it.
+pick which readings it shows and their text size. An oscilloscope (Shift+O) is wired in
+like any part; its front panel in the results panel sets volts and time per division, the
+trigger (Auto, Normal or Single), Auto set, measurements and time or voltage cursors, and
+saves with the circuit. The interactive simulation runs in real time by default; the speed
+slider steps from 1/1000× to 1000×, and microphones and speakers work at 1×. The time step
+follows the speed unless you turn off Automatic time step and set your own; the circuit
+file keeps it.
 
 Wires route as in Multisim and EasyEDA: click to start one, click again for each corner,
 and it ends on the pin or wire you click, on a double-click, or with a right-click or

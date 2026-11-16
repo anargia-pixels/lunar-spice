@@ -164,6 +164,12 @@ const GLYPHS: Record<ToolId | "more", ReactNode> = {
       <path d="M12 2v3M12 19v3M9 9l3 6 3-6" />
     </>
   ),
+  oscilloscope: (
+    <>
+      <rect x="2" y="4" width="20" height="16" rx="1.5" />
+      <path d="M5 13c1.5-5 3-5 4.5 0s3 5 4.5 0 3-5 4.5 0" />
+    </>
+  ),
   "voltage-probe": (
     <>
       <path d="M3 21l6-6" />

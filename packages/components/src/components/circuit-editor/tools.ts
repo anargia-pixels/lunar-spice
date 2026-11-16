@@ -347,6 +347,15 @@ const TOOL_DEFINITIONS = [
     isPrimary: false,
   },
   {
+    id: "oscilloscope",
+    label: "Oscilloscope",
+    group: "General",
+    kind: "oscilloscope",
+    keys: [key("o", true)],
+    size: { dx: 0, dy: 0 },
+    isPrimary: false,
+  },
+  {
     id: "microphone",
     label: "Electret microphone",
     group: "Audio",

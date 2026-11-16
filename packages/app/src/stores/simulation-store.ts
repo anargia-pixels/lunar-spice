@@ -3,6 +3,7 @@ import {
   INITIAL_STATUS,
   type SimulationStatus,
 } from "@lunar-spice/components/circuit-editor/simulation-status";
+import type { OscilloscopeEntry } from "@lunar-spice/components/lib/oscilloscope-feed";
 import type { Scope } from "@lunar-spice/components/lib/scope";
 import type {
   AcSweepOptions,
@@ -20,7 +21,7 @@ import type {
 import { useLayoutStore } from "./layout-store";
 
 /** Which tab the results panel shows. */
-export type ResultsTab = "scopes" | "analysis";
+export type ResultsTab = "oscilloscopes" | "scopes" | "analysis";
 
 type SimulationStore = {
   editor: EditorController | null; // Runs the interactive simulation.
@@ -29,6 +30,7 @@ type SimulationStore = {
   transientOptions: TransientOptions;
   status: SimulationStatus; // As the editor last reported it.
   scopes: readonly Scope[];
+  oscilloscopes: readonly OscilloscopeEntry[];
   result: AnalysisResult | null;
   resultCircuitId: string | null; // The circuit the result belongs to.
   resultText: string | null; // The circuit text the result came from.
@@ -41,6 +43,7 @@ type SimulationStore = {
   setEditor: (editor: EditorController | null) => void;
   setStatus: (status: SimulationStatus) => void;
   setScopes: (scopes: readonly Scope[]) => void;
+  setOscilloscopes: (oscilloscopes: readonly OscilloscopeEntry[]) => void;
   setResultsTab: (tab: ResultsTab) => void;
   runAnalysis: (circuitId: string, text: string) => void;
   cancelAnalysis: () => void;
@@ -74,6 +77,7 @@ export const useSimulationStore = create<SimulationStore>()(
       },
       status: INITIAL_STATUS,
       scopes: [],
+      oscilloscopes: [],
       result: null,
       resultCircuitId: null,
       resultText: null,
@@ -96,6 +100,25 @@ export const useSimulationStore = create<SimulationStore>()(
         set((state) => ({
           scopes,
           resultsTab: isAdded ? "scopes" : state.resultsTab,
+        }));
+
+        if (isAdded) {
+          useLayoutStore.getState().setResultsOpen(true);
+        }
+      },
+      setOscilloscopes: (oscilloscopes) => {
+        const known = new Set(
+          get().oscilloscopes.map(({ elementId }) => elementId),
+        );
+
+        const isAdded = oscilloscopes.some(
+          ({ elementId }) => !known.has(elementId),
+        );
+
+        // Show a new oscilloscope's front panel at once.
+        set((state) => ({
+          oscilloscopes,
+          resultsTab: isAdded ? "oscilloscopes" : state.resultsTab,
         }));
 
         if (isAdded) {

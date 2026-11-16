@@ -35,6 +35,20 @@ function post(message: FromWorker) {
     transfer.push(scope.voltages.buffer, scope.currents.buffer);
   }
 
+  for (const { live, triggered } of message.oscilloscopes) {
+    for (const trace of [live, triggered]) {
+      for (const channel of trace?.channels ?? []) {
+        if (channel) {
+          transfer.push(
+            channel.extremes.buffer,
+            channel.means.buffer,
+            channel.squares.buffer,
+          );
+        }
+      }
+    }
+  }
+
   if (message.sound) {
     transfer.push(message.sound.buffer);
   }
@@ -103,6 +117,9 @@ self.addEventListener("message", (event: MessageEvent<ToWorker>) => {
       break;
     case "scopes":
       engine.setScopes(message.scopes);
+      break;
+    case "oscilloscopes":
+      engine.setOscilloscopes(message.oscilloscopes);
       break;
     case "frame":
       lastFrame = performance.now();

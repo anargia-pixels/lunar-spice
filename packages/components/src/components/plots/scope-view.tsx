@@ -2,13 +2,6 @@ import { Cancel01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Button } from "@lunar-spice/components/ui/button";
 import { Label } from "@lunar-spice/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@lunar-spice/components/ui/select";
 import { Slider } from "@lunar-spice/components/ui/slider";
 import { Switch } from "@lunar-spice/components/ui/switch";
 import { formatSi } from "@lunar-spice/simulator/units";
@@ -40,6 +33,7 @@ import {
   type PlotData,
   PlotFrame,
 } from "./plot-canvas";
+import { ScaleSelect } from "./scale-select";
 
 /** How each strip names, colors and labels its quantity. */
 const QUANTITIES = {
@@ -63,44 +57,6 @@ const VOLTAGE_SCALE_LABELS = Object.fromEntries([
     `±${formatSi(scale, "V")}`,
   ]),
 ]);
-
-/** A compact dropdown in a scope's header. */
-function ScaleSelect({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: Record<string, string>;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <Select
-      items={options}
-      value={value}
-      onValueChange={(next) => {
-        const match = Object.keys(options).find((key) => key === next);
-
-        if (match !== undefined) {
-          onChange(match);
-        }
-      }}
-    >
-      <SelectTrigger size="sm" aria-label={label}>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent alignItemWithTrigger={false}>
-        {Object.entries(options).map(([key, text]) => (
-          <SelectItem key={key} value={key}>
-            {text}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
 
 /**
  * Where the pointer and cursors sit on a scope, as fractions across its time window, so

@@ -1,5 +1,7 @@
 import type { SimulationSettings } from "@lunar-spice/simulator/circuit";
+import type { OscilloscopeSettings } from "@lunar-spice/simulator/elements/oscilloscope";
 
+import type { OscilloscopeTrace } from "../../lib/oscilloscope";
 import type { ScopeSettings } from "../../lib/scope";
 import type { StateFields } from "./element-state";
 
@@ -31,6 +33,12 @@ export type ScopeRequest = {
   settings: ScopeSettings;
 };
 
+/** An oscilloscope in the schematic, with its front panel as the editor last set it. */
+export type OscilloscopeRequest = {
+  elementId: number;
+  settings: OscilloscopeSettings;
+};
+
 /** The sound the worker makes and hears; set by the editor, which plays and records. */
 export type SoundSettings = {
   /** The output device's sample rate; null while no sound runs. */
@@ -54,6 +62,10 @@ export type ToWorker =
   | { kind: "settings"; settings: SimulationSettings }
   | { kind: "running"; isRunning: boolean }
   | { kind: "scopes"; scopes: readonly ScopeRequest[] }
+  | {
+      kind: "oscilloscopes";
+      oscilloscopes: readonly OscilloscopeRequest[];
+    }
   /** Sent every animation frame while running; answered with a snapshot. */
   | { kind: "frame"; sound: SoundSettings }
   | { kind: "input"; samples: Float32Array };
@@ -69,6 +81,19 @@ export type ScopeData = {
   meter: StateFields;
 };
 
+/** What an oscilloscope recorded since the last snapshot. */
+export type OscilloscopeData = {
+  elementId: number;
+  /** The latest screenful, untriggered. */
+  live: OscilloscopeTrace | null;
+  /** A trace frozen at a trigger since the last snapshot, or null. */
+  triggered: OscilloscopeTrace | null;
+  /** When the trigger last fired, in simulated seconds; null since the recording began. */
+  lastTrigger: number | null;
+  /** Each channel's meter, for autoset. */
+  meters: readonly StateFields[];
+};
+
 export type FromWorker = {
   kind: "snapshot";
   /** The load this snapshot is of; the editor drops element state from older ones. */
@@ -82,6 +107,7 @@ export type FromWorker = {
   /** What the simulation changed on each element since it was read, by element id. */
   states: readonly (readonly [number, StateFields])[];
   scopes: readonly ScopeData[];
+  oscilloscopes: readonly OscilloscopeData[];
   /** Speaker output at the device's sample rate, to play after the last. */
   sound: Float32Array<ArrayBuffer> | null;
 };

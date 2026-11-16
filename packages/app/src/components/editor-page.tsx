@@ -46,7 +46,9 @@ export function EditorPage() {
 
   const isPanelOpen = useLayoutStore((state) => state.panelOpen);
   const isResultsOpen = useLayoutStore((state) => state.resultsOpen);
-  const { setEditor, setStatus, setScopes } = useSimulationStore.getState();
+
+  const { setEditor, setStatus, setScopes, setOscilloscopes } =
+    useSimulationStore.getState();
 
   if (bufferId === undefined) {
     return null;
@@ -78,6 +80,7 @@ export function EditorPage() {
             }
             onStatus={setStatus}
             onScopesChange={setScopes}
+            onOscilloscopesChange={setOscilloscopes}
           />
         </ResizablePanel>
         {isResultsOpen && (
