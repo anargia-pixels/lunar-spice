@@ -11,7 +11,12 @@ import {
   type Point,
   roundPoint,
 } from "../geometry";
-import { type AcSystem, mispredicts, type MnaSystem } from "../mna-system";
+import {
+  type AcSystem,
+  type Handle,
+  mispredicts,
+  type MnaSystem,
+} from "../mna-system";
 import { ParamSet, type ParamSpec, type Preset } from "../params";
 import { formatSi } from "../units";
 
@@ -166,6 +171,30 @@ const OP_AMP_PRESETS: readonly Preset[] = [
   },
 ];
 
+/**
+ * Returns how long something `distance` short of a breakpoint takes to reach it moving
+ * toward it at `speed`: 0 once past it, Infinity when it is not getting closer.
+ */
+function timeToCross(distance: number, speed: number) {
+  if (!(distance > 0)) {
+    return distance <= 0 ? 0 : Number.POSITIVE_INFINITY;
+  }
+
+  return speed > 0 ? distance / speed : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * How many breakpoint steps a stage may take to snap over once a limit lets go of it.
+ * A comparator regenerates through its high-gain region in about six time constants.
+ */
+const SNAPPING_STEPS = 10;
+
+/**
+ * How far past its knee the input stage is saturated, in units of the difference that
+ * reaches it: its current is then within 0.5% of the largest.
+ */
+const SATURATED_STAGE = 3;
+
 /** Ratio of the swing limiter's pull to the input stage's largest current. */
 const LIMITER_STIFFNESS = 1000;
 
@@ -190,8 +219,32 @@ export class OpAmp extends CircuitElement {
   /** The input stage's current and slope at `lastInputDifference`, as last stamped. */
   private lastStageCurrent = 0;
   private lastStageConductance = 0;
+  /**
+   * The input difference those two were worked out at with the parameters `stamp` last
+   * read, so a stamp at the same difference reuses them; NaN when they are from before.
+   */
+  private stageInput = Number.NaN;
   /** Which swing limit holds the pole node: 1 high, -1 low, 0 neither. */
   private limit = 0;
+  /**
+   * The input difference and pole node voltage the latest step ended on, to tell from how
+   * fast each moves when the next breakpoint comes. `hasSettled` is false until a step
+   * has ended.
+   */
+  private hasSettled = false;
+  /** The limit that held the pole node when the latest step ended. */
+  private settledLimit = 0;
+  /** Seconds since a limit let go of the pole node, while the stage still snaps over. */
+  private snappingFor = Number.POSITIVE_INFINITY;
+  private settledDifference = 0;
+  private settledPole = 0;
+  /** Seconds from the latest step's end to the next breakpoint, as `finishStep` predicts. */
+  private untilBreakpoint = Number.POSITIVE_INFINITY;
+  /** Where the pole stage stamps: the pole node's row, and in it the inputs and itself. */
+  private poleRow: Handle = 0;
+  private poleFromInverting: Handle = 0;
+  private poleFromNonInverting: Handle = 0;
+  private poleFromPole: Handle = 0;
   /**
    * The parameters each step reads, as `stamp` last read them: they hold for a whole
    * simulation, and looking them up every iteration costs more than the stage itself.
@@ -204,6 +257,13 @@ export class OpAmp extends CircuitElement {
     vmin: 0,
     /** The input stage's largest current, which sets the slew rate. */
     maxCurrent: 0,
+    /** The longest step that follows the pole stage through a breakpoint. */
+    breakpointStep: Number.POSITIVE_INFINITY,
+    /** The input differences where the limiters let go of the pole node. */
+    releaseHigh: Number.NEGATIVE_INFINITY,
+    releaseLow: Number.POSITIVE_INFINITY,
+    /** The conductance a limiter holds the pole node with. */
+    stiffness: 0,
   };
 
   static override read(
@@ -315,6 +375,10 @@ export class OpAmp extends CircuitElement {
       vmax: this.params.get("vmax"),
       vmin: this.params.get("vmin"),
       maxCurrent: 0,
+      breakpointStep: Number.POSITIVE_INFINITY,
+      releaseHigh: Number.NEGATIVE_INFINITY,
+      releaseLow: Number.POSITIVE_INFINITY,
+      stiffness: 0,
     };
 
     const row = system.branchUnknown(this.firstBranch);
@@ -332,6 +396,8 @@ export class OpAmp extends CircuitElement {
       system.stampResistor(driven, this.node(2), rout);
     }
 
+    this.stageInput = Number.NaN;
+
     if (!this.hasPole) {
       return;
     }
@@ -342,6 +408,19 @@ export class OpAmp extends CircuitElement {
     this.pole.capacitance =
       this.params.get("gain") / (2 * Math.PI * this.params.get("gbw"));
     this.stage.maxCurrent = this.maxStageCurrent();
+    // With positive feedback the stage regenerates with a time constant of about
+    // 1 / (2π × GBW × feedback). A trapezoidal step follows it while shorter than twice
+    // that; past it the step's growth factor turns negative and the node rings.
+    this.stage.breakpointStep = 2 / (Math.PI * this.params.get("gbw"));
+    this.stage.releaseHigh = this.releaseDifference(this.stage.vmax);
+    this.stage.releaseLow = this.releaseDifference(this.stage.vmin);
+    this.stage.stiffness =
+      (LIMITER_STIFFNESS * this.stage.maxCurrent) /
+      Math.max(Math.abs(this.stage.vmax), Math.abs(this.stage.vmin), 1);
+    this.poleRow = system.rightSideRow(poleNode);
+    this.poleFromInverting = system.variableEntry(poleNode, this.node(0));
+    this.poleFromNonInverting = system.variableEntry(poleNode, this.node(1));
+    this.poleFromPole = system.variableEntry(poleNode, poleNode);
     system.stampMatrix(poleNode, poleNode, 1);
     this.pole.stamp(system, poleNode, 0);
     // The output follows the pole node.
@@ -349,14 +428,23 @@ export class OpAmp extends CircuitElement {
     system.stampMatrix(row, poleNode, -1);
   }
 
+  /**
+   * Held at a limit, the limiter and the pole capacitor form a mode far faster than any
+   * step, which the trapezoidal rule leaves ringing; backward Euler damps it. A step that
+   * may let go keeps the trapezoidal rule: the stage then regenerates, and backward Euler
+   * turns that over once the step outlasts its time constant.
+   */
   override startStep(system: MnaSystem) {
-    this.pole.startStep(system);
+    this.pole.startStep(
+      system,
+      this.settledLimit !== 0 && this.timeToBreakpoint() > system.timeStep,
+    );
   }
 
   override stampStep(system: MnaSystem) {
-    const [inverting = 0, nonInverting = 0] = this.volts;
+    const { volts } = this;
     const { offset, hasPole } = this.stage;
-    const difference = nonInverting - inverting + offset;
+    const difference = (volts[1] ?? 0) - (volts[0] ?? 0) + offset;
 
     if (hasPole) {
       this.stampPoleStage(system, difference, offset);
@@ -373,29 +461,36 @@ export class OpAmp extends CircuitElement {
     difference: number,
     offset: number,
   ) {
-    const poleNode = this.node(this.poleIndex());
+    const { poleRow } = this;
     const poleVoltage = this.volts[this.poleIndex()] ?? 0;
     const { gain, maxCurrent, vmax, vmin } = this.stage;
-    const ratio = Math.tanh((gain * difference) / maxCurrent);
-    const current = maxCurrent * ratio;
-    const conductance = gain * (1 - ratio * ratio);
 
-    const predicted =
-      this.lastStageCurrent +
-      this.lastStageConductance * (difference - this.lastInputDifference);
+    // A step's first stamp is at the voltages the one before it ended on.
+    if (difference !== this.stageInput) {
+      const ratio = Math.tanh((gain * difference) / maxCurrent);
+      const current = maxCurrent * ratio;
 
-    if (mispredicts(current, predicted)) {
-      system.converged = false;
+      const predicted =
+        this.lastStageCurrent +
+        this.lastStageConductance * (difference - this.lastInputDifference);
+
+      if (mispredicts(current, predicted)) {
+        system.converged = false;
+      }
+
+      this.lastStageCurrent = current;
+      this.lastStageConductance = gain * (1 - ratio * ratio);
+      this.stageInput = difference;
     }
 
-    this.lastStageCurrent = current;
-    this.lastStageConductance = conductance;
+    const current = this.lastStageCurrent;
+    const conductance = this.lastStageConductance;
 
     // The stage pushes `current` into the pole node: a negative current leaving it.
-    system.stampMatrix(poleNode, this.node(1), -conductance);
-    system.stampMatrix(poleNode, this.node(0), conductance);
-    system.stampRightSide(
-      poleNode,
+    system.addEntry(this.poleFromNonInverting, -conductance);
+    system.addEntry(this.poleFromInverting, conductance);
+    system.addRightSide(
+      poleRow,
       current - conductance * difference + conductance * offset,
     );
 
@@ -408,14 +503,17 @@ export class OpAmp extends CircuitElement {
     }
 
     if (limit !== 0) {
-      const swing = Math.max(Math.abs(vmax), Math.abs(vmin), 1);
-      const stiffness = (LIMITER_STIFFNESS * maxCurrent) / swing;
+      const { stiffness } = this.stage;
 
-      system.stampMatrix(poleNode, poleNode, stiffness);
-      system.stampRightSide(poleNode, stiffness * (limit === 1 ? vmax : vmin));
+      system.addEntry(this.poleFromPole, stiffness);
+      system.addRightSide(poleRow, stiffness * (limit === 1 ? vmax : vmin));
     }
 
-    this.pole.stampStep(system, poleNode, 0);
+    if (this.pole.extraConductance !== 0) {
+      system.addEntry(this.poleFromPole, this.pole.extraConductance);
+    }
+
+    this.pole.stampStep(system);
   }
 
   /** Stamps Falstad's clipped voltage-controlled source, used without a gain-bandwidth product. */
@@ -464,7 +562,95 @@ export class OpAmp extends CircuitElement {
   }
 
   override finishStep(system: MnaSystem) {
-    this.pole.finish(system, this.volts[this.poleIndex()] ?? 0);
+    const { volts } = this;
+    const pole = volts[this.poleIndex()] ?? 0;
+
+    this.pole.finish(system, pole);
+
+    if (system.mode !== "transient" || !this.stage.hasPole) {
+      return;
+    }
+
+    const difference = (volts[1] ?? 0) - (volts[0] ?? 0) + this.stage.offset;
+    const { gain, maxCurrent, breakpointStep } = this.stage;
+
+    // Once a limit lets go, the stage snaps over until its current saturates, or, with
+    // negative feedback, settles within a few time constants.
+    if (this.settledLimit !== 0 && this.limit === 0) {
+      this.snappingFor = 0;
+    } else {
+      this.snappingFor += system.timeStep;
+    }
+
+    if (
+      this.limit !== 0 ||
+      Math.abs(gain * difference) >= SATURATED_STAGE * maxCurrent ||
+      this.snappingFor >= SNAPPING_STEPS * breakpointStep
+    ) {
+      this.snappingFor = Number.POSITIVE_INFINITY;
+    }
+
+    const differenceRate =
+      (difference - this.settledDifference) / system.timeStep;
+
+    const poleRate = (pole - this.settledPole) / system.timeStep;
+    const hadSettled = this.hasSettled;
+
+    this.hasSettled = true;
+    this.settledLimit = this.limit;
+    this.settledDifference = difference;
+    this.settledPole = pole;
+    this.untilBreakpoint = hadSettled
+      ? this.predictBreakpoint(differenceRate, poleRate)
+      : Number.POSITIVE_INFINITY;
+  }
+
+  override timeToBreakpoint() {
+    return this.snappingFor === Number.POSITIVE_INFINITY
+      ? this.untilBreakpoint
+      : 0;
+  }
+
+  /**
+   * Returns the seconds until the next breakpoint, were the input difference and the pole
+   * node to keep moving at these rates, in volts per second. The pole stage has two: a
+   * limiter lets go of the pole node once the input difference crosses where the stage
+   * no longer pushes it past the limit, and catches it once it slews to the other limit.
+   */
+  private predictBreakpoint(differenceRate: number, poleRate: number) {
+    const { vmax, vmin, releaseHigh, releaseLow } = this.stage;
+
+    if (this.settledLimit === 1) {
+      return timeToCross(this.settledDifference - releaseHigh, -differenceRate);
+    }
+
+    if (this.settledLimit === -1) {
+      return timeToCross(releaseLow - this.settledDifference, differenceRate);
+    }
+
+    return poleRate > 0
+      ? timeToCross(vmax - this.settledPole, poleRate)
+      : timeToCross(this.settledPole - vmin, -poleRate);
+  }
+
+  override breakpointStep() {
+    return this.stage.breakpointStep;
+  }
+
+  /**
+   * Returns the input difference where the stage pushes just `limit` amps into the pole
+   * node's 1 Ω, which holds it at `limit` volts: the limiter lets go there.
+   */
+  private releaseDifference(limit: number) {
+    const { gain, maxCurrent } = this.stage;
+    const ratio = limit / maxCurrent;
+
+    // A stage too weak to reach the limit never lets go of it.
+    if (!(Math.abs(ratio) < 1)) {
+      return limit > 0 ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY;
+    }
+
+    return (maxCurrent / gain) * Math.atanh(ratio);
   }
 
   override stampAc(system: AcSystem, omega: number) {
@@ -491,7 +677,14 @@ export class OpAmp extends CircuitElement {
     this.lastInputDifference = 0;
     this.lastStageCurrent = 0;
     this.lastStageConductance = 0;
+    this.stageInput = Number.NaN;
     this.limit = 0;
+    this.hasSettled = false;
+    this.settledLimit = 0;
+    this.snappingFor = Number.POSITIVE_INFINITY;
+    this.settledDifference = 0;
+    this.settledPole = 0;
+    this.untilBreakpoint = Number.POSITIVE_INFINITY;
     this.pole.reset();
   }
 

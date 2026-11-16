@@ -362,13 +362,24 @@ export abstract class CircuitElement {
     return false;
   }
 
-  /** Stamps the values that stay constant until the netlist or time step changes. */
+  /**
+   * Stamps the values that stay constant until the netlist or time step changes. A step
+   * that is divided is solved by other systems with shorter time steps and no stamp in
+   * between, so nothing kept from here may depend on `system.timeStep`.
+   */
   stamp(_system: MnaSystem) {}
 
-  /** Runs once per time step before the Newton iterations, to update companion models. */
+  /**
+   * Runs once per time step before the Newton iterations, to update companion models:
+   * what they keep that depends on `system.timeStep` is worked out here.
+   */
   startStep(_system: MnaSystem) {}
 
-  /** Stamps one Newton iteration: time-varying sources and nonlinear models. */
+  /**
+   * Stamps a step. A linear element stamps once per step, and only right-hand sides: its
+   * time-varying source or its companion model's history. A nonlinear one stamps its
+   * model every Newton iteration.
+   */
   stampStep(_system: MnaSystem) {}
 
   /** Receives a voltage source's solved current; `index` counts from `firstBranch`. */
@@ -378,6 +389,35 @@ export abstract class CircuitElement {
 
   /** Runs after a step converges, to compute currents and keep state. */
   finishStep(_system: MnaSystem) {}
+
+  /**
+   * True when `finishStep` only works out readings from the element's voltages and keeps
+   * nothing a later step needs, like a resistor's current. A simulation that leaves idle
+   * elements for `updateIdleElements` then finishes it there instead of every step.
+   */
+  finishesFromVoltages() {
+    return false;
+  }
+
+  /**
+   * Seconds from the latest step to the element's next breakpoint, where its model
+   * changes regime, as a comparator leaving its rail; Infinity when none is ahead. It is
+   * extrapolated from how the element moved over that step. Steps end on breakpoints, so
+   * what happens there starts on time instead of on the step grid. While the element
+   * still snaps over from one regime to the next, as a comparator regenerating through
+   * its high-gain region, it returns 0, which keeps steps at `breakpointStep`.
+   */
+  timeToBreakpoint() {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  /**
+   * The longest step that follows the element through a breakpoint, set by its own
+   * fastest time scale, as an op-amp's 2 / (π × GBW).
+   */
+  breakpointStep() {
+    return Number.POSITIVE_INFINITY;
+  }
 
   /** Stamps the small-signal model for one AC sweep frequency `omega`, in rad/s. */
   stampAc(_system: AcSystem, _omega: number) {}

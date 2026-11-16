@@ -75,6 +75,10 @@ export class Resistor extends CircuitElement {
     this.current = this.voltageDifference() / this.resistance;
   }
 
+  override finishesFromVoltages() {
+    return true;
+  }
+
   override info() {
     return [this.title(), `R = ${this.valueLabel()}`, ...this.readingLines()];
   }
@@ -197,6 +201,10 @@ export class Potentiometer extends CircuitElement {
       this.node(1),
       this.resistanceFromWiper(),
     );
+  }
+
+  override finishesFromVoltages() {
+    return true;
   }
 
   override finishStep() {
@@ -426,7 +434,7 @@ export class Capacitor extends CircuitElement {
   }
 
   override stampStep(system: MnaSystem) {
-    this.plates.stampStep(system, this.platesNode(), this.node(1));
+    this.plates.stampStep(system);
   }
 
   override finishStep(system: MnaSystem) {
@@ -574,12 +582,13 @@ export class Inductor extends CircuitElement {
       return;
     }
 
-    this.companionResistance = (2 * this.inductance) / system.timeStep;
-    system.stampResistor(a, b, this.companionResistance);
+    system.stampInductance(a, b, this.inductance);
   }
 
   override startStep(system: MnaSystem) {
     if (system.mode === "transient") {
+      // A divided step is solved by a system with a shorter time step.
+      this.companionResistance = system.inductorResistance(this.inductance);
       this.companionCurrent =
         this.windingVoltage() / this.companionResistance + this.current;
     }

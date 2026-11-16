@@ -35,20 +35,24 @@ export const CUSTOM_MODEL = "Custom";
 /**
  * A device's model values with the part name they came from. It reads and writes them in
  * spec order in circuit files and turns them into edit fields.
+ *
+ * `values` holds them by spec key. Models read the ones they need from it each step:
+ * a field read, where `get` looks its key up.
  */
 export class ParamSet {
   readonly specs: readonly ParamSpec[];
   readonly presets: readonly Preset[];
   modelName: string;
-  private readonly values = new Map<string, number>();
+  readonly values: Record<string, number> = {};
 
   constructor(specs: readonly ParamSpec[], presets: readonly Preset[]) {
     this.specs = specs;
     this.presets = presets;
     this.modelName = presets[0]?.name ?? CUSTOM_MODEL;
 
+    // Every set takes its keys in spec order, so sets of one device share a layout.
     for (const spec of specs) {
-      this.values.set(spec.key, spec.fallback);
+      this.values[spec.key] = spec.fallback;
     }
 
     if (presets[0]) {
@@ -57,11 +61,11 @@ export class ParamSet {
   }
 
   get(key: string) {
-    return this.values.get(key) ?? 0;
+    return this.values[key] ?? 0;
   }
 
   set(key: string, value: number) {
-    this.values.set(key, value);
+    this.values[key] = value;
   }
 
   /** Sets every value from `values`; keys it leaves out go back to their defaults. */
@@ -69,7 +73,7 @@ export class ParamSet {
     for (const spec of this.specs) {
       const value = values[spec.key];
 
-      this.values.set(spec.key, value ?? spec.fallback);
+      this.values[spec.key] = value ?? spec.fallback;
     }
   }
 
@@ -112,10 +116,8 @@ export class ParamSet {
         model.params.has(candidate),
       );
 
-      this.values.set(
-        spec.key,
-        name === undefined ? spec.fallback : (model.params.get(name) ?? 0),
-      );
+      this.values[spec.key] =
+        name === undefined ? spec.fallback : (model.params.get(name) ?? 0);
     }
 
     this.modelName = model.name;
@@ -126,7 +128,7 @@ export class ParamSet {
     this.modelName = unescapeText(reader.string(this.modelName));
 
     for (const spec of this.specs) {
-      this.values.set(spec.key, reader.number(spec.fallback));
+      this.values[spec.key] = reader.number(spec.fallback);
     }
   }
 

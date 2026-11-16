@@ -55,6 +55,12 @@ type RunElement = {
   instance: number;
 };
 
+/** A scope and the element it records. */
+type Probe = {
+  scope: Scope;
+  element: CircuitElement;
+};
+
 /**
  * The interactive simulation without the editor: it rebuilds the circuit from file lines,
  * steps it in real time at the set speed, records scopes, makes sound, and reports what
@@ -77,6 +83,8 @@ export class RunEngine {
   private byId = new Map<number, CircuitElement>();
   /** The elements the scopes watch, in scope order. */
   private scoped: CircuitElement[] = [];
+  /** Each scope with the element it watches, for recording every step. */
+  private probes: Probe[] = [];
   private readonly sound = new RunSound();
 
   /** True while it has a circuit to step: running and without an error. */
@@ -204,11 +212,12 @@ export class RunEngine {
   }
 
   private updateScoped() {
-    this.scoped = this.scopes.flatMap(({ elementId }) => {
-      const element = this.byId.get(elementId);
+    this.probes = this.scopes.flatMap((scope) => {
+      const element = this.byId.get(scope.elementId);
 
-      return element ? [element] : [];
+      return element ? [{ scope, element }] : [];
     });
+    this.scoped = this.probes.map(({ element }) => element);
   }
 
   updateSound(settings: SoundSettings) {
@@ -282,18 +291,14 @@ export class RunEngine {
   }
 
   private recordScopes(timeStep: number) {
-    this.scopes.forEach((scope) => {
-      const element = this.byId.get(scope.elementId);
+    for (const { scope, element } of this.probes) {
+      // A wire or net label probes its net's voltage to ground.
+      const voltage = element.isNetElement()
+        ? (element.volts[0] ?? 0)
+        : element.voltageDifference();
 
-      if (element) {
-        // A wire or net label probes its net's voltage to ground.
-        const voltage = element.isNetElement()
-          ? (element.volts[0] ?? 0)
-          : element.voltageDifference();
-
-        recordSample(scope, voltage, element.current, timeStep);
-      }
-    });
+      recordSample(scope, voltage, element.current, timeStep);
+    }
   }
 
   /** Reports the state of every element, the scopes and the sound made since the last. */

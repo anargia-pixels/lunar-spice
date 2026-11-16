@@ -88,6 +88,13 @@ function emptyExtremes(): Extremes {
   };
 }
 
+/** Empties `extremes` in place: a bucket fills every few steps, too often to allocate. */
+function resetExtremes(extremes: Extremes) {
+  extremes.low = Number.POSITIVE_INFINITY;
+  extremes.high = Number.NEGATIVE_INFINITY;
+  extremes.isHighLater = false;
+}
+
 export function createScope(
   elementId: number,
   title: string,
@@ -168,8 +175,8 @@ export function recordSample(
   writeBucket(scope.currents, index, scope.pendingCurrent);
   scope.count += ENTRIES_PER_BUCKET;
   scope.pendingSteps = 0;
-  scope.pendingVoltage = emptyExtremes();
-  scope.pendingCurrent = emptyExtremes();
+  resetExtremes(scope.pendingVoltage);
+  resetExtremes(scope.pendingCurrent);
 }
 
 /** Drops every sample, as when the simulation starts again from 0 s. */
@@ -178,8 +185,8 @@ export function clearScope(scope: Scope) {
   scope.peakVoltage = 0;
   scope.meter.reset();
   scope.pendingSteps = 0;
-  scope.pendingVoltage = emptyExtremes();
-  scope.pendingCurrent = emptyExtremes();
+  resetExtremes(scope.pendingVoltage);
+  resetExtremes(scope.pendingCurrent);
 }
 
 /**

@@ -11,7 +11,12 @@ import {
   type Point,
   roundPoint,
 } from "../geometry";
-import { type AcSystem, mispredicts, type MnaSystem } from "../mna-system";
+import {
+  type AcSystem,
+  type Handle,
+  mispredicts,
+  type MnaSystem,
+} from "../mna-system";
 import { CUSTOM_MODEL, ParamSet, type ParamSpec, type Preset } from "../params";
 import { parseSpiceModel, type SpiceModel } from "../spice-model";
 import { formatSi } from "../units";
@@ -382,7 +387,7 @@ export class Diode extends CircuitElement {
 
     system.stampConductance(anode, cathode, conductance);
     system.stampCurrentSource(anode, cathode, current - conductance * voltage);
-    this.junction.stampStep(system, anode, cathode);
+    this.junction.stampStep(system);
   }
 
   override finishStep(system: MnaSystem) {
@@ -836,8 +841,8 @@ export class Bjt extends CircuitElement {
 
     system.stampConductance(base, emitter, JUNCTION_GMIN);
     system.stampConductance(base, collector, JUNCTION_GMIN);
-    this.emitterJunction.stampStep(system, base, emitter);
-    this.collectorJunction.stampStep(system, base, collector);
+    this.emitterJunction.stampStep(system);
+    this.collectorJunction.stampStep(system);
   }
 
   override finishStep(system: MnaSystem) {
@@ -1119,6 +1124,27 @@ export class Mosfet extends CircuitElement {
   private lastCurrent = 0;
   private lastGateSlope = 0;
   private lastDrainSlope = 0;
+  /** Vgs and Vds as `limitStep` last limited them. */
+  private limitedVgs = 0;
+  private limitedVds = 0;
+  /**
+   * Where the channel stamps: the rows of its drain and source, and in each the gate, the
+   * drain and the source.
+   */
+  private drainRow: Handle = 0;
+  private sourceRow: Handle = 0;
+  private drainFromGate: Handle = 0;
+  private drainFromDrain: Handle = 0;
+  private drainFromSource: Handle = 0;
+  private sourceFromGate: Handle = 0;
+  private sourceFromDrain: Handle = 0;
+  private sourceFromSource: Handle = 0;
+  /** The channel as `channelCurrent` last worked it out; steps reuse it instead of a new one. */
+  protected readonly channel: ChannelPoint = {
+    current: 0,
+    transconductance: 0,
+    outputConductance: 0,
+  };
 
   static override read(
     x1: number,
@@ -1196,7 +1222,7 @@ export class Mosfet extends CircuitElement {
 
   /** Returns the index in `nodes` of the channel's drain end: past RD, if any. */
   protected channelDrain() {
-    return this.params.get("rd") > 0 ? 3 : 2;
+    return (this.params.values.rd ?? 0) > 0 ? 3 : 2;
   }
 
   override isNonlinear() {
@@ -1210,10 +1236,22 @@ export class Mosfet extends CircuitElement {
       system.stampResistor(this.node(2), this.node(3), rd);
     }
 
+    const gate = this.node(0);
+    const source = this.node(1);
+    const drain = this.node(this.channelDrain());
+
+    this.drainRow = system.rightSideRow(drain);
+    this.sourceRow = system.rightSideRow(source);
+    this.drainFromGate = system.variableEntry(drain, gate);
+    this.drainFromDrain = system.variableEntry(drain, drain);
+    this.drainFromSource = system.variableEntry(drain, source);
+    this.sourceFromGate = system.variableEntry(source, gate);
+    this.sourceFromDrain = system.variableEntry(source, drain);
+    this.sourceFromSource = system.variableEntry(source, source);
     this.gateSource.capacitance = this.params.get("cgs");
     this.gateDrain.capacitance = this.params.get("cgd");
-    this.gateSource.stamp(system, this.node(0), this.node(1));
-    this.gateDrain.stamp(system, this.node(0), this.node(this.channelDrain()));
+    this.gateSource.stamp(system, gate, source);
+    this.gateDrain.stamp(system, gate, drain);
   }
 
   override startStep(system: MnaSystem) {
@@ -1228,12 +1266,13 @@ export class Mosfet extends CircuitElement {
 
   /** The gate voltage, in N-channel terms, at which the channel starts to conduct. */
   protected threshold() {
-    return this.params.get("vto");
+    return this.params.values.vto ?? 0;
   }
 
   /**
    * Limits a Newton step to `vgs` and `vds` from the last linearization, as SPICE does: by
-   * the gate voltage on the side the channel conducts from, then the drain voltage.
+   * the gate voltage on the side the channel conducts from, then the drain voltage. The
+   * result goes into `limitedVgs` and `limitedVds`.
    */
   private limitStep(vgs: number, vds: number) {
     const threshold = this.threshold();
@@ -1243,10 +1282,10 @@ export class Mosfet extends CircuitElement {
     if (this.lastVds >= 0) {
       const gateShift = limitGateVoltage(vgs, this.lastVgs, threshold) - vgs;
 
-      return {
-        vgs: vgs + gateShift,
-        vds: limitDrainVoltage(vds + gateShift, this.lastVds),
-      };
+      this.limitedVgs = vgs + gateShift;
+      this.limitedVds = limitDrainVoltage(vds + gateShift, this.lastVds);
+
+      return;
     }
 
     // With the drain below the source, the drain acts as the source.
@@ -1257,126 +1296,130 @@ export class Mosfet extends CircuitElement {
 
     const limitedVds = -limitDrainVoltage(gateShift - vds, -this.lastVds);
 
-    return { vgs: vgs + (gateShift + limitedVds - vds), vds: limitedVds };
+    this.limitedVgs = vgs + (gateShift + limitedVds - vds);
+    this.limitedVds = limitedVds;
   }
 
   /**
-   * The channel current from drain to source at `vgs` and `vds`, in N-channel terms, with
-   * its slopes in Vgs and Vds. With the drain below the source, the terminals swap roles.
+   * Linearizes the channel at `vgs` and `vds`, in N-channel terms: its current from drain
+   * to source goes into `lastCurrent` and its slopes in Vgs and Vds beside it. With the
+   * drain below the source, the terminals swap roles.
    */
-  private channelAt(vgs: number, vds: number) {
-    if (vds >= 0) {
-      const channel = this.channelCurrent(vgs, vds);
+  private linearizeChannel(vgs: number, vds: number) {
+    const { channel } = this;
 
-      return {
-        current: channel.current + CHANNEL_LEAKAGE * vds,
-        gateSlope: channel.transconductance,
-        drainSlope: channel.outputConductance + CHANNEL_LEAKAGE,
-      };
+    this.lastVgs = vgs;
+    this.lastVds = vds;
+
+    if (vds >= 0) {
+      this.channelCurrent(vgs, vds);
+      this.lastCurrent = channel.current + CHANNEL_LEAKAGE * vds;
+      this.lastGateSlope = channel.transconductance;
+      this.lastDrainSlope = channel.outputConductance + CHANNEL_LEAKAGE;
+
+      return;
     }
 
-    const channel = this.channelCurrent(vgs - vds, -vds);
-
-    return {
-      current: CHANNEL_LEAKAGE * vds - channel.current,
-      gateSlope: -channel.transconductance,
-      drainSlope:
-        channel.transconductance + channel.outputConductance + CHANNEL_LEAKAGE,
-    };
+    this.channelCurrent(vgs - vds, -vds);
+    this.lastCurrent = CHANNEL_LEAKAGE * vds - channel.current;
+    this.lastGateSlope = -channel.transconductance;
+    this.lastDrainSlope =
+      channel.transconductance + channel.outputConductance + CHANNEL_LEAKAGE;
   }
 
   override stampStep(system: MnaSystem) {
+    const { volts } = this;
     const sign = this.polarity;
-    const gate = this.node(0);
-    const source = this.node(1);
-    const drainIndex = this.channelDrain();
-    const drain = this.node(drainIndex);
-    const vg = this.volts[0] ?? 0;
-    const vs = this.volts[1] ?? 0;
-    const vd = this.volts[drainIndex] ?? 0;
+    const vg = volts[0] ?? 0;
+    const vs = volts[1] ?? 0;
+    const vd = volts[this.channelDrain()] ?? 0;
     const measuredVgs = sign * (vg - vs);
     const measuredVds = sign * (vd - vs);
-    const { vgs, vds } = this.limitStep(measuredVgs, measuredVds);
-    const channel = this.channelAt(vgs, vds);
+
+    this.limitStep(measuredVgs, measuredVds);
+
+    const vgs = this.limitedVgs;
+    const vds = this.limitedVds;
 
     const predicted =
       this.lastCurrent +
       this.lastGateSlope * (vgs - this.lastVgs) +
       this.lastDrainSlope * (vds - this.lastVds);
 
+    this.linearizeChannel(vgs, vds);
+
+    const current = this.lastCurrent;
+    const gateSlope = this.lastGateSlope;
+    const drainSlope = this.lastDrainSlope;
+
     // Converged once a step lands where the last linearization predicted the current,
     // and limiting left it alone.
     if (
       vgs !== measuredVgs ||
       vds !== measuredVds ||
-      mispredicts(channel.current, predicted)
+      mispredicts(current, predicted)
     ) {
       system.converged = false;
     }
 
-    this.lastVgs = vgs;
-    this.lastVds = vds;
-    this.lastCurrent = channel.current;
-    this.lastGateSlope = channel.gateSlope;
-    this.lastDrainSlope = channel.drainSlope;
-
     // The current drain to source, linearized, in real polarity.
-    const { gateSlope, drainSlope } = channel;
+    const constant = sign * (current - gateSlope * vgs - drainSlope * vds);
 
-    const constant =
-      sign * (channel.current - gateSlope * vgs - drainSlope * vds);
-
-    system.stampMatrix(drain, gate, gateSlope);
-    system.stampMatrix(drain, drain, drainSlope);
-    system.stampMatrix(drain, source, -gateSlope - drainSlope);
-    system.stampRightSide(drain, -constant);
-    system.stampMatrix(source, gate, -gateSlope);
-    system.stampMatrix(source, drain, -drainSlope);
-    system.stampMatrix(source, source, gateSlope + drainSlope);
-    system.stampRightSide(source, constant);
-    this.gateSource.stampStep(system, gate, source);
-    this.gateDrain.stampStep(system, gate, drain);
-    this.drainCurrent = sign * channel.current;
+    system.addEntry(this.drainFromGate, gateSlope);
+    system.addEntry(this.drainFromDrain, drainSlope);
+    system.addEntry(this.drainFromSource, -gateSlope - drainSlope);
+    system.addRightSide(this.drainRow, -constant);
+    system.addEntry(this.sourceFromGate, -gateSlope);
+    system.addEntry(this.sourceFromDrain, -drainSlope);
+    system.addEntry(this.sourceFromSource, gateSlope + drainSlope);
+    system.addRightSide(this.sourceRow, constant);
+    this.gateSource.stampStep(system);
+    this.gateDrain.stampStep(system);
+    this.drainCurrent = sign * current;
   }
 
   /**
-   * The square-law (level 1) channel current at `vgs` and `vds` (never negative), in
-   * N-channel terms, with its derivatives: linear region, then saturation; nothing below
-   * threshold.
+   * Works out the square-law (level 1) channel current at `vgs` and `vds` (never
+   * negative), in N-channel terms, with its derivatives, into `channel`: linear region,
+   * then saturation; nothing below threshold.
    */
-  protected channelCurrent(vgs: number, vds: number): ChannelPoint {
-    const beta = this.params.get("kp");
-    const lambda = this.params.get("lambda");
-    const overdrive = vgs - this.params.get("vto");
+  protected channelCurrent(vgs: number, vds: number) {
+    const { channel } = this;
+    const { kp: beta = 0, lambda = 0, vto = 0 } = this.params.values;
+    const overdrive = vgs - vto;
     const modulation = 1 + lambda * vds;
 
     if (overdrive <= 0) {
-      return { current: 0, transconductance: 0, outputConductance: 0 };
+      channel.current = 0;
+      channel.transconductance = 0;
+      channel.outputConductance = 0;
+
+      return;
     }
 
     if (vds < overdrive) {
       const base = beta * (overdrive * vds - (vds * vds) / 2);
 
-      return {
-        current: base * modulation,
-        transconductance: beta * vds * modulation,
-        outputConductance:
-          beta * (overdrive - vds) * modulation + base * lambda,
-      };
+      channel.current = base * modulation;
+      channel.transconductance = beta * vds * modulation;
+      channel.outputConductance =
+        beta * (overdrive - vds) * modulation + base * lambda;
+
+      return;
     }
 
     const base = (beta / 2) * overdrive * overdrive;
 
-    return {
-      current: base * modulation,
-      transconductance: beta * overdrive * modulation,
-      outputConductance: base * lambda,
-    };
+    channel.current = base * modulation;
+    channel.transconductance = beta * overdrive * modulation;
+    channel.outputConductance = base * lambda;
   }
 
   override finishStep(system: MnaSystem) {
-    const [vg = 0, vs = 0] = this.volts;
-    const vd = this.volts[this.channelDrain()] ?? 0;
+    const { volts } = this;
+    const vg = volts[0] ?? 0;
+    const vs = volts[1] ?? 0;
+    const vd = volts[this.channelDrain()] ?? 0;
 
     this.gateSource.finish(system, vg - vs);
     this.gateDrain.finish(system, vg - vd);
@@ -1679,38 +1722,40 @@ export class Jfet extends Mosfet {
 
   /** Conducts from Vgs = −VTO on. */
   protected override threshold() {
-    return -this.params.get("vto");
+    return -(this.params.values.vto ?? 0);
   }
 
   /** Conducts from Vgs = −VTO on, so it is on with the gate at the source. */
-  protected override channelCurrent(vgs: number, vds: number): ChannelPoint {
-    const beta = this.params.get("beta");
-    const lambda = this.params.get("lambda");
-    const overdrive = vgs + this.params.get("vto");
+  protected override channelCurrent(vgs: number, vds: number) {
+    const { channel } = this;
+    const { beta = 0, lambda = 0, vto = 0 } = this.params.values;
+    const overdrive = vgs + vto;
     const modulation = 1 + lambda * vds;
 
     if (overdrive <= 0) {
-      return { current: 0, transconductance: 0, outputConductance: 0 };
+      channel.current = 0;
+      channel.transconductance = 0;
+      channel.outputConductance = 0;
+
+      return;
     }
 
     if (vds < overdrive) {
       const base = beta * vds * (2 * overdrive - vds);
 
-      return {
-        current: base * modulation,
-        transconductance: 2 * beta * vds * modulation,
-        outputConductance:
-          2 * beta * (overdrive - vds) * modulation + base * lambda,
-      };
+      channel.current = base * modulation;
+      channel.transconductance = 2 * beta * vds * modulation;
+      channel.outputConductance =
+        2 * beta * (overdrive - vds) * modulation + base * lambda;
+
+      return;
     }
 
     const base = beta * overdrive * overdrive;
 
-    return {
-      current: base * modulation,
-      transconductance: 2 * beta * overdrive * modulation,
-      outputConductance: base * lambda,
-    };
+    channel.current = base * modulation;
+    channel.transconductance = 2 * beta * overdrive * modulation;
+    channel.outputConductance = base * lambda;
   }
 
   /**

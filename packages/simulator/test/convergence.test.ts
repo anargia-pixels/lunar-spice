@@ -80,4 +80,35 @@ describe("convergence", () => {
     // Steps of 25 µs, a ninth of a period, run through every flip.
     expect(() => oscillate(2.5e-5)).not.toThrow();
   });
+
+  test("steps of 1 µs and 10 µs time the oscillator alike", () => {
+    // Each flip lands on its breakpoint whatever the step, so both agree within 0.2 %.
+    expect(Math.abs(oscillate(1e-5) / oscillate(1e-6) - 1)).toBeLessThan(0.002);
+  });
+
+  test("divided steps leave no sliver of a step to rounding", () => {
+    const circuit = Circuit.parse(OSCILLATOR);
+    const capacitor = circuit.elements.find(({ kind }) => kind === "capacitor");
+    let shortest = Number.POSITIVE_INFINITY;
+
+    if (capacitor) {
+      const finishStep = capacitor.finishStep.bind(capacitor);
+
+      capacitor.finishStep = (system) => {
+        shortest = Math.min(shortest, system.timeStep);
+        finishStep(system);
+      };
+    }
+
+    // 100 ns is no binary fraction of a second, so the shorter steps it divides into
+    // need not add up to it exactly.
+    const simulation = new Simulation(circuit.elements, "transient", 1e-7);
+
+    for (let step = 0; step < 20_000; step += 1) {
+      simulation.step();
+    }
+
+    // A step under 1 ps stamps companion conductances too large to solve.
+    expect(shortest).toBeGreaterThanOrEqual(1e-12);
+  });
 });

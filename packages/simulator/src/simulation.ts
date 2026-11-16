@@ -18,20 +18,57 @@ const MAX_STEP_ITERATIONS = 20;
 
 /**
  * Newton iterations allowed for a step that is part of a divided one. These steps already
- * fall back on smaller ones, so a step that will not converge gives up sooner: a
- * comparator snapping over fails each division until the steps are short enough.
+ * fall back on shorter ones, so a step that will not converge gives up sooner.
  */
 const MAX_DIVIDED_STEP_ITERATIONS = 10;
 
-/** How many equal parts a time step that fails to converge is retried in. */
+/**
+ * How closely Newton must return to the solution of two or three iterations before, next
+ * to how far it moved in the last one, to count as going around in a circle. A step that
+ * does so will not converge within its iterations: a clamp inside positive feedback flips
+ * on and off like this until the step is short enough. An oscillation that does die out
+ * comes this close only when it shrinks by less than a tenth per iteration, too slowly to
+ * settle in the iterations a step gets.
+ */
+const CYCLE_RATIO = 0.1;
+
+/**
+ * How many times shorter a step that fails is retried, and how many times longer each
+ * one after a step that succeeds may be, up to the set step.
+ */
 const STEP_DIVISIONS = 4;
 
 /**
- * The smallest step a failed one is divided into, in seconds. Steps divide down to this
- * however large the set step is: positive feedback, as in a comparator with hysteresis,
- * snaps over in nanoseconds, and a step only converges through it once it is shorter.
+ * How many times shorter each cached inner simulation steps than the one before it. The
+ * steps through a breakpoint are the longest of these lengths an element allows, so
+ * finer lengths waste less of it than `STEP_DIVISIONS` would.
+ */
+const CHAIN_DIVISIONS = 2;
+
+/**
+ * The shortest step a divided one is made of, in seconds. Positive feedback, as in a
+ * comparator with hysteresis, snaps over in nanoseconds, and a step only converges
+ * through it once it is shorter.
  */
 const MIN_DIVIDED_STEP = 1e-12;
+
+/**
+ * A step toward a breakpoint stops short of it by at most this part of the way, and at
+ * least half a crossing step, so the next step crosses it. The prediction it lands by is
+ * a straight line, and a step longer than a crossing step that runs past a breakpoint
+ * fails.
+ */
+const LANDING_DIVISIONS = 16;
+
+/**
+ * Within that, a step toward a breakpoint stops short of it by this many times how far
+ * the prediction moved since the step before: a straight approach, as an op-amp slewing
+ * to its limit, lands a crossing step away in one.
+ */
+const LANDING_DRIFTS = 2;
+
+/** How close two step lengths must be, relative to them, to count as the same. */
+const LENGTH_TOLERANCE = 1e-9;
 
 /** Newton iterations allowed for one DC solve at a given source level. */
 const MAX_DC_ITERATIONS = 200;
@@ -45,7 +82,7 @@ const CONVERGENCE_MESSAGE =
 /** True when `element` does something in `hook`; wires and the like keep the empty default. */
 function overrides(
   element: CircuitElement,
-  hook: "startStep" | "stampStep" | "finishStep",
+  hook: "stamp" | "startStep" | "stampStep" | "finishStep" | "timeToBreakpoint",
 ) {
   return element[hook] !== CircuitElement.prototype[hook];
 }
@@ -60,6 +97,14 @@ type PostVoltages = {
 function postVoltagesOf(elements: readonly CircuitElement[]): PostVoltages[] {
   return elements.map(({ nodes, volts }) => ({ nodes, volts }));
 }
+
+/** One voltage source of an element and the unknown that holds its current. */
+type Branch = {
+  element: CircuitElement;
+  /** Counts from the element's first branch. */
+  index: number;
+  unknown: number;
+};
 
 /** A wire-like element's place in the wire network around one point. */
 type ConductorEdge = {
@@ -268,36 +313,75 @@ export class Simulation {
    */
   faults: readonly CircuitElement[] = [];
   /**
-   * When false, steps leave the voltages of idle elements (wires, grounds, net labels:
-   * the ones no step hook visits) and the currents through wires for
-   * `updateIdleElements`. The interactive run calls it once a frame instead of every
-   * step; analyses read every element after each step, so they keep the default.
+   * When false, steps leave idle elements for `updateIdleElements`: the voltages of the
+   * ones no step hook visits (wires, grounds, net labels), the readings of the ones that
+   * only read their voltages (resistors), and the currents through wires. The interactive
+   * run calls it once a frame and the transient analysis once per recorded step.
    */
   updatesIdleElements = true;
-  private isFactored = false;
   private readonly conductorCurrents: ConductorCurrents;
   /** The solution before the step being solved, to go back to when it fails. */
   private readonly previousSolution: Float64Array;
-  /** Solves this one's failed steps in smaller ones; built on the first failure. */
-  private finer: Simulation | null = null;
+  /** The solutions of the last three Newton iterations, to tell when they go in a circle. */
+  private lastIterate: Float64Array;
+  private earlierIterate: Float64Array;
+  private earliestIterate: Float64Array;
+  /**
+   * The simulations that take the shorter steps a divided step is made of: the one at
+   * index k steps 1 / 2^k as long as this one. Each is built when first needed.
+   */
+  private readonly shorter: (Simulation | undefined)[] = [];
+  /**
+   * Takes the steps of any other length, which end on a breakpoint or at the end of a
+   * divided step. It is stamped again for each new length.
+   */
+  private anyLength: Simulation | null = null;
+  /**
+   * When the soonest breakpoint was last predicted to come, the time that prediction
+   * was made at, and how far it moved from the one before; Infinity until it is known.
+   */
+  private breakpointAt = Number.POSITIVE_INFINITY;
+  private predictedAt = Number.NaN;
+  private predictionDrift = Number.POSITIVE_INFINITY;
+  /** True for a simulation that takes another's shorter steps: it only tries each one. */
+  private isInner = false;
   /** Newton iterations a step may take before it counts as failed. */
   private maxStepIterations = MAX_STEP_ITERATIONS;
+  /** True when a step that fails may be retried in shorter ones. */
+  private isDivisible: boolean;
+  /** The elements that tell their breakpoints. */
+  private readonly breaking: readonly CircuitElement[];
   /**
-   * The elements that do something in each step hook or own a branch. Steps visit only
-   * these, so the wires that make up most of a schematic cost nothing per step.
+   * The elements that do something in each hook. Steps visit only these, so the wires
+   * that make up most of a schematic cost nothing per step. Linear elements stamp a step
+   * once; nonlinear ones stamp every Newton iteration.
    */
+  private readonly stamped: readonly CircuitElement[];
   private readonly starting: readonly CircuitElement[];
-  private readonly stamping: readonly CircuitElement[];
+  private readonly linear: readonly CircuitElement[];
+  private readonly nonlinear: readonly CircuitElement[];
   private readonly finishing: readonly CircuitElement[];
-  private readonly branched: readonly CircuitElement[];
+  /** The idle elements that finish a step from their voltages, whenever those are given. */
+  private readonly idleFinishing: readonly CircuitElement[];
+  private readonly branches: readonly Branch[];
+  /** The nonlinear elements whose linearization point moved in the latest iteration. */
+  private readonly unsettled: CircuitElement[] = [];
+  private unsettledCount = 0;
   /**
-   * Voltages solves write: every iteration for the elements that stamp one, after each
-   * step for the others that take part in it, and on request for idle ones.
+   * Voltages solves write: every iteration for nonlinear elements, after each step for
+   * the others that take part in it, and on request for idle ones.
    */
   private readonly iteratedVoltages: readonly PostVoltages[];
   private readonly steppedVoltages: readonly PostVoltages[];
   private readonly idleVoltages: readonly PostVoltages[];
   private readonly idleElements: ReadonlySet<CircuitElement>;
+  /**
+   * The list `updateIdleElementsAmong` was last given, whether it needs every wire
+   * current, and which of it is idle.
+   */
+  private among: readonly CircuitElement[] | null = null;
+  private amongNeedsAll = false;
+  private amongIdle: CircuitElement[] = [];
 
   constructor(
     elements: readonly CircuitElement[],
@@ -317,23 +401,58 @@ export class Simulation {
     this.hasExactConvergenceTests = elements.every(
       (element) => !element.isNonlinear() || element.hasExactConvergenceTest(),
     );
+    this.isDivisible = timeStep / STEP_DIVISIONS >= MIN_DIVIDED_STEP;
     this.conductorCurrents = new ConductorCurrents(elements);
     this.previousSolution = new Float64Array(this.system.solution.length);
+    this.lastIterate = new Float64Array(this.system.solution.length);
+    this.earlierIterate = new Float64Array(this.system.solution.length);
+    this.earliestIterate = new Float64Array(this.system.solution.length);
+    this.stamped = elements.filter((element) => overrides(element, "stamp"));
+    this.breaking =
+      mode === "transient"
+        ? elements.filter((element) => overrides(element, "timeToBreakpoint"))
+        : [];
     this.starting = elements.filter((element) =>
       overrides(element, "startStep"),
     );
-    this.stamping = elements.filter((element) =>
+
+    const stamping = elements.filter((element) =>
       overrides(element, "stampStep"),
     );
-    this.finishing = elements.filter((element) =>
+
+    this.linear = stamping.filter((element) => !element.isNonlinear());
+    this.nonlinear = stamping.filter((element) => element.isNonlinear());
+
+    const branched = elements.filter(
+      (element) => element.branchCount(mode) > 0,
+    );
+
+    // An element that only reads its voltages afterwards takes part in no step.
+    const stepping = new Set([...this.starting, ...stamping, ...branched]);
+
+    const finishing = elements.filter((element) =>
       overrides(element, "finishStep"),
     );
-    this.branched = elements.filter((element) => element.branchCount(mode) > 0);
 
-    const iterated = new Set(this.stamping);
+    this.finishing = finishing.filter(
+      (element) => stepping.has(element) || !element.finishesFromVoltages(),
+    );
+    this.idleFinishing = finishing.filter(
+      (element) => !this.finishing.includes(element),
+    );
+
+    this.branches = branched.flatMap((element) =>
+      Array.from({ length: element.branchCount(mode) }, (_, index) => ({
+        element,
+        index,
+        unknown: this.system.branchUnknown(element.firstBranch + index),
+      })),
+    );
+
+    const iterated = new Set(this.nonlinear);
 
     const stepped = new Set(
-      [...this.starting, ...this.finishing, ...this.branched].filter(
+      [...stepping, ...this.finishing].filter(
         (element) => !iterated.has(element),
       ),
     );
@@ -343,7 +462,7 @@ export class Simulation {
         (element) => !iterated.has(element) && !stepped.has(element),
       ),
     );
-    this.iteratedVoltages = postVoltagesOf(this.stamping);
+    this.iteratedVoltages = postVoltagesOf(this.nonlinear);
     this.steppedVoltages = postVoltagesOf([...stepped]);
     this.idleVoltages = postVoltagesOf([...this.idleElements]);
     this.stampBase();
@@ -366,7 +485,7 @@ export class Simulation {
   private stampBase() {
     this.system.beginBase();
 
-    for (const element of this.elements) {
+    for (const element of this.stamped) {
       element.stamp(this.system);
     }
 
@@ -374,14 +493,26 @@ export class Simulation {
       this.system.stampConductance(node, 0, NODE_GMIN);
     }
 
-    this.isFactored = false;
+    this.system.finishBase();
   }
 
   /** Copies node voltages from the solution onto the posts of `elements`. */
   private applySolution(elements: readonly PostVoltages[]) {
-    for (const { nodes, volts } of elements) {
+    const { solution } = this.system;
+
+    for (let index = 0; index < elements.length; index += 1) {
+      const element = elements[index];
+
+      if (element === undefined) {
+        continue;
+      }
+
+      const { nodes, volts } = element;
+
       for (let post = 0; post < nodes.length; post += 1) {
-        volts[post] = this.system.value(nodes[post] ?? 0);
+        const node = nodes[post] ?? 0;
+
+        volts[post] = node > 0 ? (solution[node] ?? 0) : 0;
       }
     }
   }
@@ -406,37 +537,55 @@ export class Simulation {
     );
   }
 
-  /** Runs Newton iterations at the current time and source level; false when they fail. */
-  private iterate(maxIterations: number) {
-    const { system } = this;
-    const unsettled: CircuitElement[] = [];
+  /**
+   * Runs Newton iterations at the current time and source level; false when they fail.
+   * With `givesUpOnCycles` they also fail as soon as they go around in a circle, for
+   * steps that are then retried in smaller ones.
+   */
+  private iterate(maxIterations: number, givesUpOnCycles: boolean) {
+    const { system, linear, nonlinear, unsettled } = this;
+
+    system.beginStep();
+
+    for (let index = 0; index < linear.length; index += 1) {
+      linear[index]?.stampStep(system);
+    }
 
     for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+      let unsettledCount = 0;
+
       system.iteration = iteration;
-      // The first solve factors the base matrix, so it needs a copy even when linear.
-      system.beginStep(this.hasNonlinear || !this.isFactored);
-      unsettled.length = 0;
+      system.beginIteration();
 
       // Stamp each element and note the ones whose linearization point still moves.
-      for (const element of this.stamping) {
+      for (let index = 0; index < nonlinear.length; index += 1) {
+        const element = nonlinear[index];
+
+        if (element === undefined) {
+          continue;
+        }
+
         system.converged = true;
         element.stampStep(system);
 
         if (!system.converged) {
-          unsettled.push(element);
+          unsettled[unsettledCount] = element;
+          unsettledCount += 1;
         }
       }
+
+      this.unsettledCount = unsettledCount;
 
       // The last solution already solves every element's equations.
       if (
         this.hasExactConvergenceTests &&
-        unsettled.length === 0 &&
+        unsettledCount === 0 &&
         iteration > 0
       ) {
         return true;
       }
 
-      if (!system.solve(this.hasNonlinear || !this.isFactored)) {
+      if (!system.solve()) {
         this.error = SINGULAR_MESSAGE;
         this.faults =
           system.lu.singularColumn < 0
@@ -446,18 +595,64 @@ export class Simulation {
         return false;
       }
 
-      this.isFactored = true;
       this.applySolution(this.iteratedVoltages);
 
-      if (!this.hasNonlinear || (unsettled.length === 0 && iteration > 0)) {
+      if (!this.hasNonlinear || (unsettledCount === 0 && iteration > 0)) {
         return true;
+      }
+
+      if (iteration > 0 && this.isCycling(iteration) && givesUpOnCycles) {
+        break;
       }
     }
 
     this.error = CONVERGENCE_MESSAGE;
-    this.faults = unsettled;
+    this.faults = unsettled.slice(0, this.unsettledCount);
 
     return false;
+  }
+
+  /**
+   * Keeps the solution of Newton iteration `iteration`, and returns true when it is back
+   * where the one two or three iterations before was while the last one is elsewhere.
+   */
+  private isCycling(iteration: number) {
+    const { solution } = this.system;
+    const { lastIterate, earlierIterate, earliestIterate } = this;
+    let lastDistance = 0;
+    let earlierDistance = 0;
+    let earliestDistance = 0;
+
+    for (let index = 1; index < solution.length; index += 1) {
+      const value = solution[index] ?? 0;
+
+      lastDistance = Math.max(
+        lastDistance,
+        Math.abs(value - (lastIterate[index] ?? 0)),
+      );
+      earlierDistance = Math.max(
+        earlierDistance,
+        Math.abs(value - (earlierIterate[index] ?? 0)),
+      );
+      earliestDistance = Math.max(
+        earliestDistance,
+        Math.abs(value - (earliestIterate[index] ?? 0)),
+      );
+      // The oldest solution makes room for this one.
+      earliestIterate[index] = value;
+    }
+
+    this.lastIterate = earliestIterate;
+    this.earlierIterate = lastIterate;
+    this.earliestIterate = earlierIterate;
+
+    const reach = CYCLE_RATIO * lastDistance;
+
+    // A step's first solutions have nothing from the same step to be compared with yet.
+    return (
+      (iteration >= 3 && earlierDistance <= reach) ||
+      (iteration >= 4 && earliestDistance <= reach)
+    );
   }
 
   /**
@@ -465,23 +660,26 @@ export class Simulation {
    * brings the idle elements up to date unless they wait for `updateIdleElements`.
    */
   private finish() {
+    const { system, branches, finishing } = this;
+    const { solution } = system;
+
     this.applySolution(this.steppedVoltages);
 
-    for (const element of this.branched) {
-      const count = element.branchCount(this.mode);
+    for (let index = 0; index < branches.length; index += 1) {
+      const branch = branches[index];
 
-      for (let index = 0; index < count; index += 1) {
-        element.setBranchCurrent(
-          index,
-          this.system.value(
-            this.system.branchUnknown(element.firstBranch + index),
-          ),
-        );
+      if (branch === undefined) {
+        continue;
       }
+
+      branch.element.setBranchCurrent(
+        branch.index,
+        solution[branch.unknown] ?? 0,
+      );
     }
 
-    for (const element of this.finishing) {
-      element.finishStep(this.system);
+    for (let index = 0; index < finishing.length; index += 1) {
+      finishing[index]?.finishStep(system);
     }
 
     if (this.updatesIdleElements) {
@@ -489,9 +687,17 @@ export class Simulation {
     }
   }
 
-  /** Gives the idle elements their voltages from the latest step and finds wire currents. */
+  /**
+   * Gives the idle elements their voltages from the latest step, finishes the ones that
+   * read theirs, and finds wire currents.
+   */
   updateIdleElements() {
     this.applySolution(this.idleVoltages);
+
+    for (const element of this.idleFinishing) {
+      element.finishStep(this.system);
+    }
+
     this.conductorCurrents.update();
   }
 
@@ -501,98 +707,306 @@ export class Simulation {
    * elements only need their own voltages.
    */
   updateIdleElementsAmong(elements: readonly CircuitElement[]) {
-    if (
-      elements.some((element) => element.isConductor() || element.isGround())
-    ) {
+    // Callers pass the same list every step, so what it needs is worked out once.
+    if (elements !== this.among) {
+      this.among = elements;
+      this.amongNeedsAll = elements.some(
+        (element) => element.isConductor() || element.isGround(),
+      );
+      this.amongIdle = elements.filter((element) =>
+        this.idleElements.has(element),
+      );
+    }
+
+    if (this.amongNeedsAll) {
       this.updateIdleElements();
 
       return;
     }
 
-    for (const element of elements) {
-      if (this.idleElements.has(element)) {
-        element.nodes.forEach((node, post) => {
-          element.volts[post] = this.system.value(node);
-        });
+    const { system, amongIdle } = this;
+    const { solution } = system;
+
+    for (let index = 0; index < amongIdle.length; index += 1) {
+      const element = amongIdle[index];
+
+      if (element === undefined) {
+        continue;
       }
+
+      const { nodes, volts } = element;
+
+      for (let post = 0; post < nodes.length; post += 1) {
+        const node = nodes[post] ?? 0;
+
+        volts[post] = node > 0 ? (solution[node] ?? 0) : 0;
+      }
+
+      element.finishStep(system);
     }
   }
 
   /**
-   * Advances one time step; false once the circuit cannot be solved. A step Newton cannot
-   * solve, as when a comparator snaps over, is solved in smaller steps instead.
+   * Advances one time step; false once the circuit cannot be solved. A step with a
+   * breakpoint inside, or one Newton cannot solve, as when a comparator snaps over, is
+   * made of shorter steps instead.
    */
   step() {
     if (this.error) {
       return false;
     }
 
-    this.system.time = this.time + this.system.timeStep;
-    this.previousSolution.set(this.system.solution);
+    const { system } = this;
 
-    for (const element of this.starting) {
-      element.startStep(this.system);
+    if (!this.isInner && this.isDivisible && this.breaking.length > 0) {
+      const untilBreakpoint = this.timeToBreakpoint();
+
+      this.notePrediction(this.time, untilBreakpoint);
+
+      if (untilBreakpoint < system.timeStep) {
+        return this.stepThrough(system.timeStep);
+      }
     }
 
-    if (this.iterate(this.maxStepIterations)) {
-      this.finish();
-    } else if (!this.canDivide() || !this.stepFiner()) {
+    if (this.tryStep()) {
+      this.time = system.time;
+
+      return true;
+    }
+
+    if (
+      this.isInner ||
+      !this.isDivisible ||
+      this.error !== CONVERGENCE_MESSAGE
+    ) {
       return false;
     }
 
-    this.time = this.system.time;
+    // A failed step changes no stored state, so the shorter ones start from before it.
+    // Only the elements that stamp had voltages from its iterations.
+    system.solution.set(this.previousSolution);
+    this.applySolution(this.iteratedVoltages);
+
+    return this.stepThrough(system.timeStep / STEP_DIVISIONS);
+  }
+
+  /** Solves one step of this simulation's length and finishes it; false when it fails. */
+  private tryStep() {
+    const { system, starting, previousSolution } = this;
+    const { solution } = system;
+
+    system.time = this.time + system.timeStep;
+
+    for (let index = 1; index < solution.length; index += 1) {
+      previousSolution[index] = solution[index] ?? 0;
+    }
+
+    for (let index = 0; index < starting.length; index += 1) {
+      starting[index]?.startStep(system);
+    }
+
+    if (!this.iterate(this.maxStepIterations, this.isDivisible)) {
+      return false;
+    }
+
+    this.finish();
 
     return true;
   }
 
-  /** True when the failed step may be retried in smaller ones. */
-  private canDivide() {
-    return (
-      this.error === CONVERGENCE_MESSAGE &&
-      this.system.timeStep / STEP_DIVISIONS >= MIN_DIVIDED_STEP
-    );
+  /** Returns the seconds to the soonest breakpoint any element sees ahead. */
+  private timeToBreakpoint() {
+    const { breaking } = this;
+    let soonest = Number.POSITIVE_INFINITY;
+
+    for (let index = 0; index < breaking.length; index += 1) {
+      const element = breaking[index];
+      const until = element?.timeToBreakpoint() ?? Number.POSITIVE_INFINITY;
+
+      if (until < soonest) {
+        soonest = until;
+      }
+    }
+
+    return soonest;
   }
 
   /**
-   * Solves the step that just failed as `STEP_DIVISIONS` smaller ones, which divide in
-   * turn when they fail. A failed step changes no stored state, so they start from the
-   * solution before it. False when the smallest steps fail too.
+   * Notes the soonest breakpoint as predicted at `time`, `untilBreakpoint` away, and how
+   * far it moved from the prediction made at an earlier time.
    */
-  private stepFiner() {
-    const { system } = this;
-
-    system.solution.set(this.previousSolution);
-    // Only the elements that stamp had voltages from the failed iterations.
-    this.applySolution(this.iteratedVoltages);
-    this.error = null;
-    this.faults = [];
-    this.finer ??= new Simulation(
-      this.elements,
-      this.mode,
-      system.timeStep / STEP_DIVISIONS,
-    );
-
-    const { finer } = this;
-
-    finer.maxStepIterations = MAX_DIVIDED_STEP_ITERATIONS;
-    finer.updatesIdleElements = this.updatesIdleElements;
-    finer.stampBase();
-    finer.system.solution.set(system.solution);
-    finer.time = this.time;
-
-    for (let part = 0; part < STEP_DIVISIONS && !finer.error; part += 1) {
-      finer.step();
+  private notePrediction(time: number, untilBreakpoint: number) {
+    if (time === this.predictedAt) {
+      return;
     }
 
-    // Take the elements back at this simulation's time step.
-    this.stampBase();
-    system.solution.set(finer.system.solution);
-    this.error = finer.error;
-    this.faults = finer.faults;
-    finer.error = null;
-    finer.faults = [];
+    const at = time + untilBreakpoint;
 
-    return this.error === null;
+    this.predictionDrift = Math.abs(at - this.breakpointAt);
+    this.breakpointAt = at;
+    this.predictedAt = time;
+  }
+
+  /**
+   * Returns the step that crosses a breakpoint: the longest of this one's shorter steps
+   * that every element allows.
+   */
+  private breakpointStep() {
+    let longest = this.system.timeStep / STEP_DIVISIONS;
+
+    for (const element of this.breaking) {
+      longest = Math.min(longest, element.breakpointStep());
+    }
+
+    return this.shorterWithin(longest);
+  }
+
+  /** Returns the longest of this one's shorter steps that is no longer than `length`. */
+  private shorterWithin(length: number) {
+    let shorter = this.system.timeStep / CHAIN_DIVISIONS;
+
+    while (shorter > length && shorter / CHAIN_DIVISIONS >= MIN_DIVIDED_STEP) {
+      shorter /= CHAIN_DIVISIONS;
+    }
+
+    return shorter;
+  }
+
+  /**
+   * Solves this step as shorter ones, the first at most `first` long. A step that fails
+   * is retried 4 times shorter, and each that succeeds lets the next be 4 times longer.
+   * Steps land within a crossing step of the next breakpoint, cross it in one, and stay
+   * that short while an element snaps over. False when the shortest steps fail too.
+   */
+  private stepThrough(first: number) {
+    const { system } = this;
+    const end = this.time + system.timeStep;
+    const crossing = this.breakpointStep();
+    let time = this.time;
+    let next = first;
+
+    this.error = null;
+    this.faults = [];
+
+    while (time < end) {
+      const remaining = end - time;
+      const untilBreakpoint = this.timeToBreakpoint();
+      let length = Math.min(next, remaining);
+
+      this.notePrediction(time, untilBreakpoint);
+
+      if (untilBreakpoint <= crossing) {
+        length = Math.min(crossing, next, remaining);
+      } else if (untilBreakpoint < length + crossing) {
+        const most = untilBreakpoint / LANDING_DIVISIONS;
+
+        // A drift of NaN, from no breakpoint before, fails the test.
+        const margin =
+          this.predictionDrift < most
+            ? Math.min(most, LANDING_DRIFTS * this.predictionDrift)
+            : most;
+
+        length = untilBreakpoint - Math.max(crossing / 2, margin);
+      } else {
+        length = this.alignedLength(length, remaining);
+      }
+
+      const inner = this.simulationFor(length);
+
+      inner.system.solution.set(system.solution);
+      inner.time = time;
+      inner.updatesIdleElements = this.updatesIdleElements;
+
+      if (inner.step()) {
+        system.solution.set(inner.system.solution);
+        // What rounding leaves of the step is no step at all: one that short would
+        // stamp companion conductances too large to solve.
+        time = remaining - length < MIN_DIVIDED_STEP ? end : time + length;
+        next = length * STEP_DIVISIONS;
+        continue;
+      }
+
+      const { error, faults } = inner;
+
+      inner.error = null;
+      inner.faults = [];
+
+      if (
+        error !== CONVERGENCE_MESSAGE ||
+        length / STEP_DIVISIONS < MIN_DIVIDED_STEP
+      ) {
+        this.error = error;
+        this.faults = faults;
+
+        return false;
+      }
+
+      // Back to where the failed step started, as above. The prediction it went by was
+      // off, so the next landing keeps the widest margin.
+      this.applySolution(this.iteratedVoltages);
+      this.predictionDrift = Number.POSITIVE_INFINITY;
+      next = length / STEP_DIVISIONS;
+    }
+
+    system.time = end;
+    this.time = end;
+
+    return true;
+  }
+
+  /**
+   * Returns `length`, or a shorter step that fits a whole number of times into what is
+   * left: steps of the lengths this one divides into need no new stamp.
+   */
+  private alignedLength(length: number, remaining: number) {
+    const shorter = this.shorterWithin(length);
+    const count = remaining / shorter;
+
+    return Math.abs(count - Math.round(count)) <= LENGTH_TOLERANCE * count
+      ? shorter
+      : length;
+  }
+
+  /** Returns the inner simulation that takes steps `length` long. */
+  private simulationFor(length: number) {
+    const { timeStep } = this.system;
+
+    const divisions = Math.round(
+      Math.log(timeStep / length) / Math.log(CHAIN_DIVISIONS),
+    );
+
+    const shorter = timeStep / CHAIN_DIVISIONS ** divisions;
+
+    if (
+      divisions >= 1 &&
+      Math.abs(shorter - length) <= LENGTH_TOLERANCE * length
+    ) {
+      return (this.shorter[divisions] ??= this.innerSimulation(shorter));
+    }
+
+    if (this.anyLength === null) {
+      this.anyLength = this.innerSimulation(length);
+    } else if (this.anyLength.system.timeStep !== length) {
+      this.anyLength.restamp(length);
+    }
+
+    return this.anyLength;
+  }
+
+  /** Builds a simulation that takes this one's shorter steps of `length`. */
+  private innerSimulation(length: number) {
+    const inner = new Simulation(this.elements, this.mode, length);
+
+    inner.isInner = true;
+    inner.maxStepIterations = MAX_DIVIDED_STEP_ITERATIONS;
+
+    return inner;
+  }
+
+  /** Takes steps of `timeStep` from now on: the base holds companion models stamped for it. */
+  private restamp(timeStep: number) {
+    this.system.retime(timeStep);
+    this.isDivisible = timeStep / STEP_DIVISIONS >= MIN_DIVIDED_STEP;
   }
 
   /**
@@ -603,7 +1017,7 @@ export class Simulation {
     this.system.time = 0;
     this.system.sourceScale = 1;
 
-    if (this.iterate(MAX_DC_ITERATIONS)) {
+    if (this.iterate(MAX_DC_ITERATIONS, false)) {
       this.finish();
 
       return true;
@@ -623,7 +1037,7 @@ export class Simulation {
       this.faults = [];
       this.system.sourceScale = level / 20;
 
-      if (!this.iterate(MAX_DC_ITERATIONS)) {
+      if (!this.iterate(MAX_DC_ITERATIONS, false)) {
         return false;
       }
     }

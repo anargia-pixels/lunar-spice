@@ -165,6 +165,21 @@ describe("idle elements", () => {
     expect(Math.abs(wire?.current ?? 0)).toBeCloseTo(0.005, 9);
   });
 
+  test("a resistor's current waits too, and is there when asked for", () => {
+    const circuit = Circuit.parse(text);
+    const resistor = circuit.elements.find(({ kind }) => kind === "resistor");
+    const simulation = new Simulation(circuit.elements, "transient", 1e-6);
+
+    simulation.updatesIdleElements = false;
+    simulation.step();
+
+    expect(resistor?.current).toBe(0);
+
+    simulation.updateIdleElementsAmong(resistor ? [resistor] : []);
+
+    expect(Math.abs(resistor?.current ?? 0)).toBeCloseTo(0.005, 9);
+  });
+
   test("wires follow every step by default", () => {
     const circuit = Circuit.parse(text);
     const wire = circuit.elements.find(({ kind }) => kind === "wire");
@@ -173,5 +188,131 @@ describe("idle elements", () => {
     simulation.step();
 
     expect(Math.abs(wire?.current ?? 0)).toBeCloseTo(0.005, 9);
+  });
+});
+
+/** Solves a dense copy of `rows` by Gaussian elimination with partial pivoting. */
+function denseSolve(rows: readonly (readonly number[])[], rhs: number[]) {
+  const a = rows.map((row, index) => [...row, rhs[index] ?? 0]);
+  const size = rows.length;
+
+  for (let column = 0; column < size; column += 1) {
+    let best = column;
+
+    for (let row = column + 1; row < size; row += 1) {
+      if (Math.abs(a[row]?.[column] ?? 0) > Math.abs(a[best]?.[column] ?? 0)) {
+        best = row;
+      }
+    }
+
+    [a[column], a[best]] = [a[best] ?? [], a[column] ?? []];
+
+    for (let row = column + 1; row < size; row += 1) {
+      const factor = (a[row]?.[column] ?? 0) / (a[column]?.[column] ?? 1);
+
+      for (let entry = column; entry <= size; entry += 1) {
+        const target = a[row] ?? [];
+
+        target[entry] =
+          (target[entry] ?? 0) - factor * (a[column]?.[entry] ?? 0);
+      }
+    }
+  }
+
+  const result = Array.from({ length: size }, () => 0);
+
+  for (let row = size - 1; row >= 0; row -= 1) {
+    let sum = a[row]?.[size] ?? 0;
+
+    for (let column = row + 1; column < size; column += 1) {
+      sum -= (a[row]?.[column] ?? 0) * (result[column] ?? 0);
+    }
+
+    result[row] = sum / (a[row]?.[row] ?? 1);
+  }
+
+  return result;
+}
+
+describe("sparse LU with variable entries", () => {
+  // A ladder with a voltage source's zero diagonal in unknown 3; entries 0 and 5 vary.
+  const constant = [
+    [2, -1, 0, 1],
+    [-1, 3, -1, 0],
+    [0, -1, 2, 0],
+    [1, 0, 0, 0],
+  ];
+
+  const variableIndices = [0, 5];
+
+  /** The matrix with `first` and `second` added to the variable entries. */
+  function rowsWith(first: number, second: number) {
+    return constant.map((row, rowIndex) =>
+      row.map((value, column) => {
+        const index = rowIndex * 4 + column;
+
+        if (index === 0) {
+          return value + first;
+        }
+
+        return index === 5 ? value + second : value;
+      }),
+    );
+  }
+
+  test("updates and solves like a dense solve, before and after compiling", () => {
+    const { values, pattern } = matrixOf(constant);
+    const lu = new LuMatrix(4);
+
+    for (const index of variableIndices) {
+      pattern.addVariable(index);
+    }
+
+    expect(lu.factor(values, pattern)).toBe(true);
+
+    // Enough solves to compile the pivots as chosen, then some more.
+    for (let solve = 0; solve < 600; solve += 1) {
+      const first = Math.sin(solve) * 0.5;
+      const second = Math.cos(solve * 0.7) * 0.8;
+      const rows = rowsWith(first, second);
+      const rhs = [1, solve % 3, -2, 5];
+
+      values[0] = rows[0]?.[0] ?? 0;
+      values[5] = rows[1]?.[1] ?? 0;
+
+      const result = new Float64Array(4);
+
+      expect(
+        lu.updateAndSolve(values, pattern, Float64Array.from(rhs), result),
+      ).toBe(true);
+      expectClose([...result], denseSolve(rows, rhs));
+    }
+  });
+
+  test("chooses new pivots when a variable pivot vanishes after compiling", () => {
+    const { values, pattern } = matrixOf([
+      [2, 1],
+      [1, 1],
+    ]);
+
+    const lu = new LuMatrix(2);
+
+    pattern.addVariable(0);
+    expect(lu.factor(values, pattern)).toBe(true);
+
+    const result = new Float64Array(2);
+
+    for (let solve = 0; solve < 300; solve += 1) {
+      lu.updateAndSolve(values, pattern, Float64Array.from([3, 2]), result);
+    }
+
+    expectClose([...result], [1, 1]);
+
+    // [[0, 1], [1, 1]] × [2, 3] = [3, 5].
+    values[0] = 0;
+    expect(
+      lu.updateAndSolve(values, pattern, Float64Array.from([3, 5]), result),
+    ).toBe(true);
+    expectClose([...result], [2, 3]);
   });
 });

@@ -2,6 +2,7 @@ import { CircuitElement, type EditField, type TokenReader } from "../element";
 import {
   type AcSystem,
   type AnalysisMode,
+  type Handle,
   mispredicts,
   type MnaSystem,
 } from "../mna-system";
@@ -84,10 +85,22 @@ export class Microphone extends CircuitElement {
    * simulation; null in analyses.
    */
   liveInput: ((time: number) => number) | null = null;
-  /** The terminal voltage, current and slope as last stamped. */
+  /** The terminal voltage and drain current last linearized at, and the current and slope there. */
   private lastVoltage = 0;
+  private lastDrain = 0;
   private lastCurrent = 0;
   private lastConductance = 0;
+  /** Where it stamps: the rows of its two posts, and in each the two posts. */
+  private plusRow: Handle = 0;
+  private minusRow: Handle = 0;
+  private plusFromPlus: Handle = 0;
+  private plusFromMinus: Handle = 0;
+  private minusFromPlus: Handle = 0;
+  private minusFromMinus: Handle = 0;
+  /** Drain current per pascal, and the sensitivity and load it was worked out from. */
+  private gain = 0;
+  private gainSensitivity = Number.NaN;
+  private gainLoad = Number.NaN;
   /**
    * The drain current as last worked out, and the time, source level and mode it was for.
    * It depends on nothing else, so every stamp of a step reuses it.
@@ -146,19 +159,35 @@ export class Microphone extends CircuitElement {
 
   /** Drain current per pascal: the datasheet's output voltage across its load. */
   private currentPerPascal() {
-    return (
-      10 ** (this.params.get("sensitivity") / 20) / this.params.get("load")
-    );
+    const { sensitivity = 0, load = 0 } = this.params.values;
+
+    // Steps ask every time, and the power costs more than the rest of a step's model.
+    if (sensitivity !== this.gainSensitivity || load !== this.gainLoad) {
+      this.gain = 10 ** (sensitivity / 20) / load;
+      this.gainSensitivity = sensitivity;
+      this.gainLoad = load;
+    }
+
+    return this.gain;
   }
 
-  /** Current through the microphone and its slope at `voltage`, for drain current `drain`. */
-  private model(voltage: number, drain: number) {
+  /**
+   * Works out the current through the microphone and its slope at `voltage`, for drain
+   * current `drain`, into `lastCurrent` and `lastConductance`. The same voltage and drain
+   * current as last time keep what is there.
+   */
+  private linearize(voltage: number, drain: number) {
+    if (voltage === this.lastVoltage && drain === this.lastDrain) {
+      return;
+    }
+
     const saturation = Math.tanh(voltage / KNEE_VOLTAGE);
 
-    return {
-      current: drain * saturation,
-      conductance: (drain / KNEE_VOLTAGE) * (1 - saturation * saturation),
-    };
+    this.lastVoltage = voltage;
+    this.lastDrain = drain;
+    this.lastCurrent = drain * saturation;
+    this.lastConductance =
+      (drain / KNEE_VOLTAGE) * (1 - saturation * saturation);
   }
 
   /** The JFET's saturated drain current at the system's time and source level. */
@@ -174,7 +203,7 @@ export class Microphone extends CircuitElement {
 
       const drain = Math.max(
         0,
-        this.params.get("bias") + this.currentPerPascal() * pressure,
+        (this.params.values.bias ?? 0) + this.currentPerPascal() * pressure,
       );
 
       this.drain = drain * sourceScale;
@@ -186,46 +215,52 @@ export class Microphone extends CircuitElement {
     return this.drain;
   }
 
+  override stamp(system: MnaSystem) {
+    const plus = this.node(0);
+    const minus = this.node(1);
+
+    this.plusRow = system.rightSideRow(plus);
+    this.minusRow = system.rightSideRow(minus);
+    this.plusFromPlus = system.variableEntry(plus, plus);
+    this.plusFromMinus = system.variableEntry(plus, minus);
+    this.minusFromPlus = system.variableEntry(minus, plus);
+    this.minusFromMinus = system.variableEntry(minus, minus);
+  }
+
   override stampStep(system: MnaSystem) {
     const voltage = this.voltageDifference();
 
-    const { current, conductance } = this.model(
-      voltage,
-      this.drainCurrent(system),
-    );
-
     const predicted =
       this.lastCurrent + this.lastConductance * (voltage - this.lastVoltage);
+
+    this.linearize(voltage, this.drainCurrent(system));
+
+    const current = this.lastCurrent;
+    const conductance = this.lastConductance;
 
     if (mispredicts(current, predicted)) {
       system.converged = false;
     }
 
-    this.lastVoltage = voltage;
-    this.lastCurrent = current;
-    this.lastConductance = conductance;
+    const source = current - conductance * voltage;
 
-    system.stampConductance(this.node(0), this.node(1), conductance);
-    system.stampCurrentSource(
-      this.node(0),
-      this.node(1),
-      current - conductance * voltage,
-    );
+    system.addEntry(this.plusFromPlus, conductance);
+    system.addEntry(this.minusFromMinus, conductance);
+    system.addEntry(this.plusFromMinus, -conductance);
+    system.addEntry(this.minusFromPlus, -conductance);
+    system.addRightSide(this.plusRow, -source);
+    system.addRightSide(this.minusRow, source);
   }
 
   override finishStep(system: MnaSystem) {
-    this.current = this.model(
-      this.voltageDifference(),
-      this.drainCurrent(system),
-    ).current;
+    this.linearize(this.voltageDifference(), this.drainCurrent(system));
+    this.current = this.lastCurrent;
   }
 
   /** Drives AC sweeps with its peak sound pressure at every frequency. */
   override stampAc(system: AcSystem) {
-    const { current } = this.model(
-      this.voltageDifference(),
-      this.currentPerPascal() * this.pressure,
-    );
+    const saturation = Math.tanh(this.voltageDifference() / KNEE_VOLTAGE);
+    const current = this.currentPerPascal() * this.pressure * saturation;
 
     system.stampCurrentPhasor(this.node(0), this.node(1), current, 0);
   }
@@ -233,6 +268,7 @@ export class Microphone extends CircuitElement {
   override reset() {
     super.reset();
     this.lastVoltage = 0;
+    this.lastDrain = 0;
     this.lastCurrent = 0;
     this.lastConductance = 0;
     this.drainTime = Number.NaN;
@@ -363,16 +399,15 @@ export class Speaker extends CircuitElement {
   }
 
   override finishStep() {
-    this.current = this.voltageDifference() / this.params.get("impedance");
+    this.current =
+      this.voltageDifference() / (this.params.values.impedance ?? 0);
   }
 
   /** The sound it plays, from −1 to 1 at its rated power; louder values clip. */
   soundLevel() {
-    const peak = Math.sqrt(
-      2 * this.params.get("power") * this.params.get("impedance"),
-    );
+    const { power = 0, impedance = 0 } = this.params.values;
 
-    return this.voltageDifference() / peak;
+    return this.voltageDifference() / Math.sqrt(2 * power * impedance);
   }
 
   override info() {

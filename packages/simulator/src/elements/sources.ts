@@ -434,6 +434,10 @@ export class CurrentSource extends CircuitElement {
     this.current = this.sourceCurrent * system.sourceScale;
   }
 
+  override finishesFromVoltages() {
+    return true;
+  }
+
   override info() {
     return [this.title(), ...this.readingLines()];
   }

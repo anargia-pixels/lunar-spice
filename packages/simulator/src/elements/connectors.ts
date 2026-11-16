@@ -144,6 +144,10 @@ export class Switch extends CircuitElement {
     }
   }
 
+  override finishesFromVoltages() {
+    return true;
+  }
+
   override info() {
     return [
       this.title(),
