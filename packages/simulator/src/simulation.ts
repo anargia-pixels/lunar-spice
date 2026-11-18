@@ -849,13 +849,17 @@ export class Simulation {
 
   /**
    * Returns the step that crosses a breakpoint: the longest of this one's shorter steps
-   * that every element allows.
+   * that every element with a breakpoint inside this step allows. The others have nothing
+   * to cross yet.
    */
   private breakpointStep() {
-    let longest = this.system.timeStep / STEP_DIVISIONS;
+    const { timeStep } = this.system;
+    let longest = timeStep / STEP_DIVISIONS;
 
     for (const element of this.breaking) {
-      longest = Math.min(longest, element.breakpointStep());
+      if (element.timeToBreakpoint() < timeStep) {
+        longest = Math.min(longest, element.breakpointStep());
+      }
     }
 
     return this.shorterWithin(longest);
@@ -876,12 +880,14 @@ export class Simulation {
    * Solves this step as shorter ones, the first at most `first` long. A step that fails
    * is retried 4 times shorter, and each that succeeds lets the next be 4 times longer.
    * Steps land within a crossing step of the next breakpoint, cross it in one, and stay
-   * that short while an element snaps over. False when the shortest steps fail too.
+   * that short while an element snaps over. Those short steps say nothing about the
+   * circuit between breakpoints, so they leave the longest step allowed as it was: once
+   * the element settles, steps go straight back to it. False when the shortest steps
+   * fail too.
    */
   private stepThrough(first: number) {
     const { system } = this;
     const end = this.time + system.timeStep;
-    const crossing = this.breakpointStep();
     let time = this.time;
     let next = first;
 
@@ -891,6 +897,8 @@ export class Simulation {
     while (time < end) {
       const remaining = end - time;
       const untilBreakpoint = this.timeToBreakpoint();
+      // An element may allow longer crossing steps as it snaps over.
+      const crossing = this.breakpointStep();
       let length = Math.min(next, remaining);
 
       this.notePrediction(time, untilBreakpoint);
@@ -922,7 +930,7 @@ export class Simulation {
         // What rounding leaves of the step is no step at all: one that short would
         // stamp companion conductances too large to solve.
         time = remaining - length < MIN_DIVIDED_STEP ? end : time + length;
-        next = length * STEP_DIVISIONS;
+        next = Math.max(next, length * STEP_DIVISIONS);
         continue;
       }
 
@@ -999,6 +1007,7 @@ export class Simulation {
 
     inner.isInner = true;
     inner.maxStepIterations = MAX_DIVIDED_STEP_ITERATIONS;
+    inner.system.outerTimeStep = this.system.timeStep;
 
     return inner;
   }

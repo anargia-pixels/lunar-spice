@@ -2,6 +2,7 @@ import type { CircuitElement } from "@lunar-spice/simulator/element";
 import { Microphone, Speaker } from "@lunar-spice/simulator/elements/audio";
 
 import type { SoundSettings } from "./run-protocol";
+import { CLIP_RATE, decodeClip } from "./sound-clips";
 
 /** Frames per capture callback. */
 const CAPTURE_FRAMES = 1024;
@@ -21,11 +22,19 @@ const LATE_START = 0.005;
  * time maps to audio time one to one, so sound only runs while the simulation runs in
  * real time. The run worker, which steps the circuit, reads the input at its own pace
  * (`RunSound`) and makes the output at the device's sample rate; each batch it sends is
- * scheduled right after the last.
+ * scheduled right after the last. It also decodes the microphones' sound clips, which the
+ * worker cannot, and hands them over as they change.
  */
 export class AudioIo {
   private readonly onError: (message: string | null) => void;
   private readonly onInput: (samples: Float32Array<ArrayBuffer>) => void;
+  private readonly onClip: (
+    elementId: number,
+    samples: Float32Array | null,
+    sampleRate: number,
+  ) => void;
+  /** The clip data each microphone was last given, by element id. */
+  private readonly clipData = new Map<number, string>();
   private context: AudioContext | null = null;
   private isInputWanted = false;
   private isOutputWanted = false;
@@ -41,11 +50,17 @@ export class AudioIo {
 
   /**
    * `onError` hears why sound cannot run, and null once it can; `onInput` gets each
-   * batch the microphone records, for the run worker.
+   * batch the microphone records, and `onClip` each microphone's decoded clip (null
+   * samples when it has none any more), for the run worker.
    */
   constructor(
     onError: (message: string | null) => void,
     onInput: (samples: Float32Array<ArrayBuffer>) => void,
+    onClip: (
+      elementId: number,
+      samples: Float32Array | null,
+      sampleRate: number,
+    ) => void,
   ) {
     this.onError = (message) => {
       if (!this.isDestroyed) {
@@ -54,6 +69,7 @@ export class AudioIo {
     };
 
     this.onInput = onInput;
+    this.onClip = onClip;
   }
 
   /** True when the circuit has a microphone or a speaker. */
@@ -67,6 +83,47 @@ export class AudioIo {
       (element) => element instanceof Microphone,
     );
     this.speakers = elements.filter((element) => element instanceof Speaker);
+    this.updateClips();
+  }
+
+  /** Decodes and hands over the clips that changed, and drops the ones now unused. */
+  private updateClips() {
+    const clips = new Map(
+      this.microphones.flatMap(({ id, sound, clip }) =>
+        sound === "clip" && clip ? [[id, clip] as const] : [],
+      ),
+    );
+
+    for (const id of this.clipData.keys()) {
+      if (!clips.has(id)) {
+        this.clipData.delete(id);
+        this.onClip(id, null, CLIP_RATE);
+      }
+    }
+
+    for (const [id, clip] of clips) {
+      if (this.clipData.get(id) === clip.data) {
+        continue;
+      }
+
+      this.clipData.set(id, clip.data);
+
+      // A clip replaced while it decoded is dropped.
+      const isCurrent = () =>
+        !this.isDestroyed && this.clipData.get(id) === clip.data;
+
+      decodeClip(clip)
+        .then((samples) => {
+          if (isCurrent()) {
+            this.onClip(id, samples, CLIP_RATE);
+          }
+        })
+        .catch(() => {
+          if (isCurrent()) {
+            this.onError(`The sound clip ${clip.name} cannot be played.`);
+          }
+        });
+    }
   }
 
   /** What the run worker needs to know to make and hear sound. */

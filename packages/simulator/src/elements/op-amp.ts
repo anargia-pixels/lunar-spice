@@ -7,6 +7,8 @@ import {
 } from "../element";
 import {
   directionSign,
+  distance,
+  interpolate,
   interpolatePair,
   type Point,
   roundPoint,
@@ -22,6 +24,24 @@ import { formatSi } from "../units";
 
 /** Distance of the inputs from the op-amp's axis. */
 const INPUT_OFFSET = 16;
+
+/** Length of the leads at either end of the op-amp's triangle. */
+const LEAD_LENGTH = 16;
+
+/** Distance of the triangle's back corners from the op-amp's axis. */
+const BODY_HALF_HEIGHT = 32;
+
+/** Distance of the VCC and VEE posts from the op-amp's axis, halfway along it. */
+const SUPPLY_OFFSET = 32;
+
+/** How far the supplies may move between Newton iterations before the swing has not converged. */
+const SUPPLY_VOLTAGE_TOLERANCE = 1e-6;
+
+/**
+ * Set on op-amps with VCC and VEE posts, whose output swings within a drop of each.
+ * Falstad's op-amps have neither, and their swing stays a fixed pair of voltages.
+ */
+const SUPPLY_POSTS_FLAG = 1 << 17;
 
 const OP_AMP_SPECS: readonly ParamSpec[] = [
   {
@@ -93,16 +113,37 @@ const OP_AMP_SPECS: readonly ParamSpec[] = [
     range: "any",
     spiceNames: [],
   },
+  {
+    key: "dropHigh",
+    label: "Output drop below VCC",
+    unit: "V",
+    fallback: 0,
+    range: "nonnegative",
+    spiceNames: [],
+    hint: "How far below VCC the output tops out: VCC minus the datasheet's high swing.",
+  },
+  {
+    key: "dropLow",
+    label: "Output drop above VEE",
+    unit: "V",
+    fallback: 0,
+    range: "nonnegative",
+    spiceNames: [],
+    hint: "How far above VEE the output bottoms out.",
+  },
 ];
+
+/** What old files add to a preset's name: the supply it was once named for. */
+const LEGACY_PRESET_SUFFIX = / \(±15 V\)$/u;
 
 const OP_AMP_PRESETS: readonly Preset[] = [
   {
     name: "Ideal",
     isGeneric: true,
-    values: { gain: 100_000, vmax: 15, vmin: -15 },
+    values: { gain: 100_000, vmax: 15, vmin: -15, dropHigh: 0, dropLow: 0 },
   },
   {
-    name: "LM741 (±15 V)",
+    name: "LM741",
     values: {
       gain: 200_000,
       gbw: 1e6,
@@ -112,10 +153,12 @@ const OP_AMP_PRESETS: readonly Preset[] = [
       vos: 1e-3,
       vmax: 13,
       vmin: -13,
+      dropHigh: 2,
+      dropLow: 2,
     },
   },
   {
-    name: "LM358 (±15 V)",
+    name: "LM358",
     values: {
       gain: 100_000,
       gbw: 1e6,
@@ -125,10 +168,12 @@ const OP_AMP_PRESETS: readonly Preset[] = [
       vos: 2e-3,
       vmax: 13.5,
       vmin: -15,
+      dropHigh: 1.5,
+      dropLow: 0.005,
     },
   },
   {
-    name: "TL072 (±15 V)",
+    name: "TL072",
     values: {
       gain: 200_000,
       gbw: 3e6,
@@ -138,10 +183,12 @@ const OP_AMP_PRESETS: readonly Preset[] = [
       vos: 3e-3,
       vmax: 13.5,
       vmin: -13.5,
+      dropHigh: 1.5,
+      dropLow: 1.5,
     },
   },
   {
-    name: "NE5532 (±15 V)",
+    name: "NE5532",
     values: {
       gain: 100_000,
       gbw: 1e7,
@@ -151,14 +198,16 @@ const OP_AMP_PRESETS: readonly Preset[] = [
       vos: 5e-4,
       vmax: 13,
       vmin: -13,
+      dropHigh: 2,
+      dropLow: 2,
     },
   },
   {
     // A comparator: datasheets give response times, not a GBW. 120 MHz turns 5 mV of
     // overdrive into 3.8 V/µs, a 5 V swing in the 1.3 µs it quotes; 17 V/µs swings 5 V
     // in its 0.3 µs for a TTL step. The open-collector output sinks 4 mA at 150 mV
-    // (37.5 Ω) and rises to its pull-up, here the +15 V rail.
-    name: "LM393 (±15 V)",
+    // (37.5 Ω) and rises to its pull-up, here VCC or the +15 V rail.
+    name: "LM393",
     values: {
       gain: 200_000,
       gbw: 1.2e8,
@@ -167,6 +216,8 @@ const OP_AMP_PRESETS: readonly Preset[] = [
       vos: 2e-3,
       vmax: 15,
       vmin: -15,
+      dropHigh: 0,
+      dropLow: 0,
     },
   },
 ];
@@ -190,13 +241,38 @@ function timeToCross(distance: number, speed: number) {
 const SNAPPING_STEPS = 10;
 
 /**
+ * How many times longer than a breakpoint step a snapping stage's steps may grow as its
+ * current saturates and its regeneration slows.
+ */
+const SNAPPING_GROWTH = 16;
+
+/**
+ * How many times shorter than the outer step a stage's whole transition, snapping over
+ * and slewing to the other limit, must be for the stage to flip in one step: that detail
+ * is then finer than anything the steps show.
+ */
+const FLIP_RATIO = 32;
+
+/**
+ * The most releases an op-amp whose flips failed snaps over in short steps before it
+ * tries one again. Under negative feedback a flip never holds, and each failed one throws
+ * Newton far off; a comparator's rarely fails.
+ */
+const MAX_FLIP_BACKOFF = 1024;
+
+/**
  * How far past its knee the input stage is saturated, in units of the difference that
  * reaches it: its current is then within 0.5% of the largest.
  */
 const SATURATED_STAGE = 3;
 
-/** Ratio of the swing limiter's pull to the input stage's largest current. */
-const LIMITER_STIFFNESS = 1000;
+/**
+ * Ratio of the swing limiter's pull to the input stage's largest current. The node gives
+ * a little as the stage weakens toward the release, and with positive feedback that give
+ * speeds the input difference up; a stiff limiter keeps it to a hundredth, so the release
+ * comes where the steps toward it predicted.
+ */
+const LIMITER_STIFFNESS = 10000;
 
 /**
  * An op-amp built from its datasheet values. With a gain-bandwidth product, the input
@@ -204,7 +280,7 @@ const LIMITER_STIFFNESS = 1000;
  * output follows. Its current saturates at slew rate × C, and a limiter holds the node
  * inside the output swing. Without one, the output is a clipped voltage-controlled
  * source, as in Falstad. Posts are the inverting input, the non-inverting input and the
- * output, which is the second point.
+ * output, which is the second point, then VCC and VEE on op-amps with supply posts.
  */
 export class OpAmp extends CircuitElement {
   readonly kind = "op-amp";
@@ -236,8 +312,25 @@ export class OpAmp extends CircuitElement {
   private settledLimit = 0;
   /** Seconds since a limit let go of the pole node, while the stage still snaps over. */
   private snappingFor = Number.POSITIVE_INFINITY;
+  /**
+   * The limit the stage flips to in this step, skipping its snap and slew: 1 high, -1
+   * low, 0 while it takes them in short steps. A held stage flips in the step its release
+   * falls in; one that let go unforeseen, in the step after.
+   */
+  private flipTo = 0;
+  /** Releases left before the stage tries to flip again, and how many the next failure skips. */
+  private flipSkips = 0;
+  private flipBackoff = 1;
+  /** The outer step the latest step was taken within, as its system said. */
+  private outerTimeStep = Number.POSITIVE_INFINITY;
   private settledDifference = 0;
   private settledPole = 0;
+  /**
+   * How fast the input difference moved over the latest step, in volts per second, and
+   * how long that step was; NaN while a limit has not held the pole node for a whole step.
+   */
+  private settledRate = Number.NaN;
+  private settledStep = 0;
   /** Seconds from the latest step's end to the next breakpoint, as `finishStep` predicts. */
   private untilBreakpoint = Number.POSITIVE_INFINITY;
   /** Where the pole stage stamps: the pole node's row, and in it the inputs and itself. */
@@ -264,7 +357,21 @@ export class OpAmp extends CircuitElement {
     releaseLow: Number.POSITIVE_INFINITY,
     /** The conductance a limiter holds the pole node with. */
     stiffness: 0,
+    /** How far inside VCC and VEE the output swings, with supply posts. */
+    dropHigh: 0,
+    dropLow: 0,
   };
+
+  /** New op-amps have supply posts; ones read from a file have them if their flags say so. */
+  constructor(
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    flags = SUPPLY_POSTS_FLAG,
+  ) {
+    super(x1, y1, x2, y2, flags);
+  }
 
   static override read(
     x1: number,
@@ -283,6 +390,13 @@ export class OpAmp extends CircuitElement {
 
     if ((flags & EXTENDED_FORMAT_FLAG) !== 0) {
       opAmp.params.read(reader);
+
+      // Presets were once named for a ±15 V supply, as in "LM358 (±15 V)".
+      const name = opAmp.params.modelName.replace(LEGACY_PRESET_SUFFIX, "");
+
+      if (OP_AMP_PRESETS.some((preset) => preset.name === name)) {
+        opAmp.params.modelName = name;
+      }
     } else {
       opAmp.params.set("vmax", maxOutput);
       opAmp.params.set("vmin", minOutput);
@@ -304,6 +418,11 @@ export class OpAmp extends CircuitElement {
     return (this.flags & 1) !== 0;
   }
 
+  /** True when VCC and VEE posts set the output swing. */
+  get hasSupplyPosts() {
+    return (this.flags & SUPPLY_POSTS_FLAG) !== 0;
+  }
+
   /** True when a gain-bandwidth product gives the op-amp a dominant pole. */
   private get hasPole() {
     return this.params.get("gbw") > 0;
@@ -322,21 +441,66 @@ export class OpAmp extends CircuitElement {
       across,
     );
 
-    return [roundPoint(inverting), roundPoint(nonInverting), this.end];
+    const posts = [roundPoint(inverting), roundPoint(nonInverting), this.end];
+
+    if (this.hasSupplyPosts) {
+      // VCC on top and VEE below, whichever input is on top.
+      const [vcc, vee] = interpolatePair(
+        this.start,
+        this.end,
+        0.5,
+        SUPPLY_OFFSET * directionSign(this.start, this.end),
+      );
+
+      posts.push(roundPoint(vcc), roundPoint(vee));
+    }
+
+    return posts;
+  }
+
+  /** Where the VCC and VEE leads meet the triangle, halfway along its sides. */
+  supplyLeadEnds() {
+    return interpolatePair(
+      this.start,
+      this.end,
+      0.5,
+      (BODY_HALF_HEIGHT / 2) * directionSign(this.start, this.end),
+    );
+  }
+
+  /** The triangle, its back a lead's length after the inputs and its tip one before the output. */
+  override bodyOutline() {
+    const { start, end } = this;
+    const length = distance(start, end) || 1;
+    const back = interpolate(start, end, LEAD_LENGTH / length);
+    const tip = interpolate(start, end, 1 - LEAD_LENGTH / length);
+
+    return [
+      interpolate(back, tip, 0, BODY_HALF_HEIGHT),
+      interpolate(back, tip, 0, -BODY_HALF_HEIGHT),
+      tip,
+    ];
   }
 
   override internalNodeCount() {
     return (this.hasPole ? 1 : 0) + (this.params.get("rout") > 0 ? 1 : 0);
   }
 
+  /** Returns how many posts the op-amp has, which is where its internal nodes start. */
+  private postCount() {
+    return this.hasSupplyPosts ? 5 : 3;
+  }
+
   /** Returns the index in `nodes` of the pole node. */
   private poleIndex() {
-    return 3;
+    return this.postCount();
   }
 
   /** Returns the index in `nodes` of the ideal output, inside the output resistance. */
   private drivenIndex() {
-    return this.params.get("rout") > 0 ? (this.hasPole ? 4 : 3) : 2;
+    return this.params.get("rout") > 0
+      ? this.postCount() + (this.hasPole ? 1 : 0)
+      : 2;
   }
 
   override branchCount() {
@@ -368,17 +532,28 @@ export class OpAmp extends CircuitElement {
   }
 
   override stamp(system: MnaSystem) {
+    const { hasPole } = this;
+    const gain = this.params.get("gain");
+    const gbw = this.params.get("gbw");
+
+    // C = AVOL / (2π × GBW) across 1 Ω puts the pole at GBW / AVOL.
+    this.pole.capacitance = hasPole ? gain / (2 * Math.PI * gbw) : 0;
     this.stage = {
-      hasPole: this.hasPole,
-      gain: this.params.get("gain"),
+      hasPole,
+      gain,
       offset: this.params.get("vos"),
       vmax: this.params.get("vmax"),
       vmin: this.params.get("vmin"),
-      maxCurrent: 0,
-      breakpointStep: Number.POSITIVE_INFINITY,
+      maxCurrent: hasPole ? this.maxStageCurrent() : 0,
+      // With positive feedback the stage regenerates with a time constant of about
+      // 1 / (2π × GBW × feedback). A trapezoidal step follows it while shorter than
+      // twice that; past it the step's growth factor turns negative and the node rings.
+      breakpointStep: hasPole ? 2 / (Math.PI * gbw) : Number.POSITIVE_INFINITY,
       releaseHigh: Number.NEGATIVE_INFINITY,
       releaseLow: Number.POSITIVE_INFINITY,
       stiffness: 0,
+      dropHigh: this.params.get("dropHigh"),
+      dropLow: this.params.get("dropLow"),
     };
 
     const row = system.branchUnknown(this.firstBranch);
@@ -398,25 +573,18 @@ export class OpAmp extends CircuitElement {
 
     this.stageInput = Number.NaN;
 
-    if (!this.hasPole) {
+    const [vmax, vmin] = this.hasSupplyPosts
+      ? this.supplySwing()
+      : [this.stage.vmax, this.stage.vmin];
+
+    this.setSwing(vmax, vmin);
+
+    if (!hasPole) {
       return;
     }
 
-    // C = AVOL / (2π × GBW) across 1 Ω puts the pole at GBW / AVOL.
     const poleNode = this.node(this.poleIndex());
 
-    this.pole.capacitance =
-      this.params.get("gain") / (2 * Math.PI * this.params.get("gbw"));
-    this.stage.maxCurrent = this.maxStageCurrent();
-    // With positive feedback the stage regenerates with a time constant of about
-    // 1 / (2π × GBW × feedback). A trapezoidal step follows it while shorter than twice
-    // that; past it the step's growth factor turns negative and the node rings.
-    this.stage.breakpointStep = 2 / (Math.PI * this.params.get("gbw"));
-    this.stage.releaseHigh = this.releaseDifference(this.stage.vmax);
-    this.stage.releaseLow = this.releaseDifference(this.stage.vmin);
-    this.stage.stiffness =
-      (LIMITER_STIFFNESS * this.stage.maxCurrent) /
-      Math.max(Math.abs(this.stage.vmax), Math.abs(this.stage.vmin), 1);
     this.poleRow = system.rightSideRow(poleNode);
     this.poleFromInverting = system.variableEntry(poleNode, this.node(0));
     this.poleFromNonInverting = system.variableEntry(poleNode, this.node(1));
@@ -435,13 +603,26 @@ export class OpAmp extends CircuitElement {
    * turns that over once the step outlasts its time constant.
    */
   override startStep(system: MnaSystem) {
+    // Held at a limit, an armed stage flips in the step its release falls in.
+    if (this.settledLimit !== 0) {
+      this.flipTo =
+        this.isArmed() && this.untilBreakpoint <= system.timeStep
+          ? -this.settledLimit
+          : 0;
+    }
+
     this.pole.startStep(
       system,
-      this.settledLimit !== 0 && this.timeToBreakpoint() > system.timeStep,
+      this.flipTo !== 0 ||
+        (this.settledLimit !== 0 && this.timeToBreakpoint() > system.timeStep),
     );
   }
 
   override stampStep(system: MnaSystem) {
+    if (this.hasSupplyPosts && this.followSupplies()) {
+      system.converged = false;
+    }
+
     const { volts } = this;
     const { offset, hasPole } = this.stage;
     const difference = (volts[1] ?? 0) - (volts[0] ?? 0) + offset;
@@ -494,8 +675,31 @@ export class OpAmp extends CircuitElement {
       current - conductance * difference + conductance * offset,
     );
 
-    // Past a swing limit, a stiff conductance holds the pole node at that limit.
-    const limit = poleVoltage > vmax ? 1 : poleVoltage < vmin ? -1 : 0;
+    // Past a swing limit, a stiff conductance holds the pole node at that limit. A step
+    // starts from the limit the one before ended on: a flip may leave the node a hair
+    // inside it, and a first solve without the limiter would throw it far past.
+    let limit =
+      system.iteration === 0 && this.settledLimit !== 0
+        ? this.settledLimit
+        : poleVoltage > vmax
+          ? 1
+          : poleVoltage < vmin
+            ? -1
+            : 0;
+
+    if (this.flipTo !== 0) {
+      limit = this.flipTo;
+
+      // Once a solve has flipped it, the stage must hold the node at its new limit: with
+      // positive feedback it does. One that would let go again snaps over as usual.
+      if (system.iteration > 0 && !this.holdsAt(this.flipTo, difference)) {
+        this.flipTo = 0;
+        this.flipSkips = this.flipBackoff;
+        this.flipBackoff = Math.min(2 * this.flipBackoff, MAX_FLIP_BACKOFF);
+        limit = poleVoltage > vmax ? 1 : poleVoltage < vmin ? -1 : 0;
+        system.converged = false;
+      }
+    }
 
     if (limit !== this.limit) {
       system.converged = false;
@@ -563,6 +767,8 @@ export class OpAmp extends CircuitElement {
 
   override finishStep(system: MnaSystem) {
     const { volts } = this;
+
+    this.outerTimeStep = system.outerTimeStep;
     const pole = volts[this.poleIndex()] ?? 0;
 
     this.pole.finish(system, pole);
@@ -578,7 +784,19 @@ export class OpAmp extends CircuitElement {
     // negative feedback, settles within a few time constants.
     if (this.settledLimit !== 0 && this.limit === 0) {
       this.snappingFor = 0;
+      this.flipTo = 0;
+
+      if (this.flipSkips > 0) {
+        this.flipSkips -= 1;
+      } else if (this.canFlip()) {
+        this.flipTo = -this.settledLimit;
+      }
     } else {
+      if (this.flipTo !== 0 && this.limit === this.flipTo) {
+        this.flipBackoff = 1;
+      }
+
+      this.flipTo = 0;
       this.snappingFor += system.timeStep;
     }
 
@@ -590,13 +808,20 @@ export class OpAmp extends CircuitElement {
       this.snappingFor = Number.POSITIVE_INFINITY;
     }
 
-    const differenceRate =
-      (difference - this.settledDifference) / system.timeStep;
+    const { timeStep } = system;
+    const averageRate = (difference - this.settledDifference) / timeStep;
+    const isHeld = this.limit !== 0 && this.limit === this.settledLimit;
 
-    const poleRate = (pole - this.settledPole) / system.timeStep;
+    const differenceRate = isHeld
+      ? this.rateAtEnd(averageRate, timeStep)
+      : averageRate;
+
+    const poleRate = (pole - this.settledPole) / timeStep;
     const hadSettled = this.hasSettled;
 
     this.hasSettled = true;
+    this.settledRate = isHeld ? averageRate : Number.NaN;
+    this.settledStep = timeStep;
     this.settledLimit = this.limit;
     this.settledDifference = difference;
     this.settledPole = pole;
@@ -605,8 +830,29 @@ export class OpAmp extends CircuitElement {
       : Number.POSITIVE_INFINITY;
   }
 
+  /**
+   * Returns how fast the input difference moves at the end of a step it moved across at
+   * `averageRate`, from how that rate changed since the step before. An input charging
+   * through an RC slows as it goes, and a limiter's release speeds up through positive
+   * feedback, so the average lags; landing on the release from it takes several steps.
+   * A rate that would turn around falls back on the average.
+   */
+  private rateAtEnd(averageRate: number, timeStep: number) {
+    const { settledRate, settledStep } = this;
+
+    if (!Number.isFinite(settledRate)) {
+      return averageRate;
+    }
+
+    // Each average rate holds at the middle of its step.
+    const slope = (averageRate - settledRate) / ((timeStep + settledStep) / 2);
+    const rate = averageRate + (slope * timeStep) / 2;
+
+    return Math.sign(rate) === Math.sign(averageRate) ? rate : averageRate;
+  }
+
   override timeToBreakpoint() {
-    return this.snappingFor === Number.POSITIVE_INFINITY
+    return this.snappingFor === Number.POSITIVE_INFINITY && this.flipTo === 0
       ? this.untilBreakpoint
       : 0;
   }
@@ -633,8 +879,119 @@ export class OpAmp extends CircuitElement {
       : timeToCross(this.settledPole - vmin, -poleRate);
   }
 
+  /**
+   * Returns the longest step that crosses a breakpoint. While the stage snaps over, its
+   * regeneration's time constant grows as its slope falls toward saturation, and so may
+   * the step that follows it.
+   */
   override breakpointStep() {
-    return this.stage.breakpointStep;
+    const { breakpointStep, gain } = this.stage;
+
+    if (this.flipTo !== 0) {
+      return this.transitionTime();
+    }
+
+    // An armed stage flips in a step centred on its release, which ends as it would
+    // reach the other limit.
+    if (this.snappingFor === Number.POSITIVE_INFINITY) {
+      return this.isArmed() ? 2 * this.transitionTime() : breakpointStep;
+    }
+
+    const slope = Math.max(
+      this.lastStageConductance / gain,
+      1 / SNAPPING_GROWTH,
+    );
+
+    return breakpointStep / slope;
+  }
+
+  /**
+   * Sets the output swing from VCC and VEE as they now are, each less its drop. A supply
+   * narrower than the two drops, as an unpowered op-amp's, pins the output between
+   * them. Returns true when the swing moved by more than the supply tolerance.
+   */
+  private followSupplies() {
+    const { vmax, vmin } = this.stage;
+    const [top, bottom] = this.supplySwing();
+
+    if (top === vmax && bottom === vmin) {
+      return false;
+    }
+
+    this.setSwing(top, bottom);
+
+    return (
+      Math.abs(top - vmax) > SUPPLY_VOLTAGE_TOLERANCE ||
+      Math.abs(bottom - vmin) > SUPPLY_VOLTAGE_TOLERANCE
+    );
+  }
+
+  /** Returns the highest and lowest output that VCC and VEE now allow. */
+  private supplySwing() {
+    const { dropHigh, dropLow } = this.stage;
+    const [, , , vcc = 0, vee = 0] = this.volts;
+    const high = vcc - dropHigh;
+    const low = vee + dropLow;
+
+    if (high >= low) {
+      return [high, low] as const;
+    }
+
+    // Kept between the supplies, so an unpowered op-amp's output sits at their level.
+    const middle = Math.min(
+      Math.max((high + low) / 2, Math.min(vcc, vee)),
+      Math.max(vcc, vee),
+    );
+
+    return [middle, middle] as const;
+  }
+
+  /** Sets the output swing, and with it where the limiters let go and how hard they hold. */
+  private setSwing(vmax: number, vmin: number) {
+    const { stage } = this;
+
+    stage.vmax = vmax;
+    stage.vmin = vmin;
+
+    if (!stage.hasPole) {
+      return;
+    }
+
+    stage.releaseHigh = this.releaseDifference(vmax);
+    stage.releaseLow = this.releaseDifference(vmin);
+    stage.stiffness =
+      (LIMITER_STIFFNESS * stage.maxCurrent) /
+      Math.max(Math.abs(vmax), Math.abs(vmin), 1);
+  }
+
+  /**
+   * Returns how long the stage takes to snap over once a limit lets go and slew the pole
+   * node to the other limit.
+   */
+  private transitionTime() {
+    const { breakpointStep, maxCurrent, vmax, vmin } = this.stage;
+
+    return (
+      SNAPPING_STEPS * breakpointStep +
+      ((vmax - vmin) * this.pole.capacitance) / maxCurrent
+    );
+  }
+
+  /** True while a limit holds the pole node and the stage will flip once it lets go. */
+  private isArmed() {
+    return this.settledLimit !== 0 && this.flipSkips === 0 && this.canFlip();
+  }
+
+  /** True when the stage's whole transition is short enough to flip over in one step. */
+  private canFlip() {
+    return this.transitionTime() * FLIP_RATIO <= this.outerTimeStep;
+  }
+
+  /** True when the stage, at input difference `difference`, pushes the pole node past `limit`. */
+  private holdsAt(limit: number, difference: number) {
+    const { releaseHigh, releaseLow } = this.stage;
+
+    return limit === 1 ? difference >= releaseHigh : difference <= releaseLow;
   }
 
   /**
@@ -661,7 +1018,9 @@ export class OpAmp extends CircuitElement {
 
   /** Returns current only on the output lead, the third path, as it leaves the op-amp. */
   override currentPaths() {
-    return [0, 0, -this.currentIntoPost(2)];
+    const paths = [0, 0, -this.currentIntoPost(2)];
+
+    return this.hasSupplyPosts ? [...paths, 0, 0] : paths;
   }
 
   override currentIntoPost(post: number) {
@@ -682,16 +1041,23 @@ export class OpAmp extends CircuitElement {
     this.hasSettled = false;
     this.settledLimit = 0;
     this.snappingFor = Number.POSITIVE_INFINITY;
+    this.flipTo = 0;
+    this.flipSkips = 0;
+    this.flipBackoff = 1;
+    this.outerTimeStep = Number.POSITIVE_INFINITY;
     this.settledDifference = 0;
     this.settledPole = 0;
+    this.settledRate = Number.NaN;
+    this.settledStep = 0;
     this.untilBreakpoint = Number.POSITIVE_INFINITY;
     this.pole.reset();
   }
 
   override info() {
-    const [inverting = 0, nonInverting = 0, output = 0] = this.volts;
+    const [inverting = 0, nonInverting = 0, output = 0, vcc = 0, vee = 0] =
+      this.volts;
 
-    return [
+    const lines = [
       this.title(),
       this.params.modelName,
       `V+ = ${formatSi(nonInverting, "V")}`,
@@ -699,11 +1065,33 @@ export class OpAmp extends CircuitElement {
       `Vout = ${formatSi(output, "V")}`,
       `Iout = ${formatSi(-this.current, "A")}`,
     ];
+
+    if (this.hasSupplyPosts) {
+      lines.push(`VCC = ${formatSi(vcc, "V")}`, `VEE = ${formatSi(vee, "V")}`);
+    }
+
+    return lines;
   }
 
   override editFields(): EditField[] {
+    // With supply posts the swing is each supply less its drop; without, a fixed pair.
+    const hiddenKeys = this.hasSupplyPosts
+      ? ["vmax", "vmin"]
+      : ["dropHigh", "dropLow"];
+
     return [
-      ...this.params.fields(),
+      ...this.params.fields().filter(({ key }) => !hiddenKeys.includes(key)),
+      {
+        kind: "boolean",
+        key: "supply-posts",
+        label: "VCC and VEE posts",
+        value: this.hasSupplyPosts,
+        set: (value) => {
+          this.flags = value
+            ? this.flags | SUPPLY_POSTS_FLAG
+            : this.flags & ~SUPPLY_POSTS_FLAG;
+        },
+      },
       {
         kind: "boolean",
         key: "swap",

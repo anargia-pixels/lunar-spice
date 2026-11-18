@@ -660,8 +660,46 @@ export class Bjt extends CircuitElement {
   baseCurrent = 0;
   collectorCurrent = 0;
   emitterCurrent = 0;
+  /** Vbe and Vbc as last linearized at, in real polarity. */
   private lastVbe = 0;
   private lastVbc = 0;
+  /**
+   * The base and collector currents' slopes in Vbe and Vbc there; the polarity cancels
+   * out of them.
+   */
+  private baseSlopeBe = 0;
+  private baseSlopeBc = 0;
+  private collectorSlopeBe = 0;
+  private collectorSlopeBc = 0;
+  /** False until a stamp has linearized at `lastVbe` and `lastVbc` with these parameters. */
+  private isLinearized = false;
+  /**
+   * The parameters each iteration reads, as `stamp` last read them: they hold for a whole
+   * simulation, and looking them up every iteration costs more than the model itself.
+   */
+  private model = {
+    is: 0,
+    bf: 1,
+    br: 1,
+    vaf: 0,
+    forwardThermal: THERMAL_VOLTAGE,
+    /** Critical voltages of the emitter and collector junctions, for `limitJunction`. */
+    forwardCritical: 0,
+    reverseCritical: 0,
+  };
+  /** Where the transistor stamps: each terminal's row, and in it each terminal. */
+  private baseRow: Handle = 0;
+  private collectorRow: Handle = 0;
+  private emitterRow: Handle = 0;
+  private baseFromBase: Handle = 0;
+  private baseFromCollector: Handle = 0;
+  private baseFromEmitter: Handle = 0;
+  private collectorFromBase: Handle = 0;
+  private collectorFromCollector: Handle = 0;
+  private collectorFromEmitter: Handle = 0;
+  private emitterFromBase: Handle = 0;
+  private emitterFromCollector: Handle = 0;
+  private emitterFromEmitter: Handle = 0;
 
   static override read(
     x1: number,
@@ -737,10 +775,40 @@ export class Bjt extends CircuitElement {
   }
 
   override stamp(system: MnaSystem) {
+    const base = this.node(0);
+    const collector = this.node(1);
+    const emitter = this.node(2);
+    const is = this.params.get("is");
+    const forwardThermal = this.params.get("nf") * THERMAL_VOLTAGE;
+
+    this.model = {
+      is,
+      bf: this.params.get("bf"),
+      br: this.params.get("br"),
+      vaf: this.params.get("vaf"),
+      forwardThermal,
+      forwardCritical: criticalVoltage(is, forwardThermal),
+      reverseCritical: criticalVoltage(is, THERMAL_VOLTAGE),
+    };
+    this.isLinearized = false;
+    this.baseRow = system.rightSideRow(base);
+    this.collectorRow = system.rightSideRow(collector);
+    this.emitterRow = system.rightSideRow(emitter);
+    this.baseFromBase = system.variableEntry(base, base);
+    this.baseFromCollector = system.variableEntry(base, collector);
+    this.baseFromEmitter = system.variableEntry(base, emitter);
+    this.collectorFromBase = system.variableEntry(collector, base);
+    this.collectorFromCollector = system.variableEntry(collector, collector);
+    this.collectorFromEmitter = system.variableEntry(collector, emitter);
+    this.emitterFromBase = system.variableEntry(emitter, base);
+    this.emitterFromCollector = system.variableEntry(emitter, collector);
+    this.emitterFromEmitter = system.variableEntry(emitter, emitter);
+    system.stampConductance(base, emitter, JUNCTION_GMIN);
+    system.stampConductance(base, collector, JUNCTION_GMIN);
     this.emitterJunction.capacitance = this.params.get("cje");
     this.collectorJunction.capacitance = this.params.get("cjc");
-    this.emitterJunction.stamp(system, this.node(0), this.node(2));
-    this.collectorJunction.stamp(system, this.node(0), this.node(1));
+    this.emitterJunction.stamp(system, base, emitter);
+    this.collectorJunction.stamp(system, base, collector);
   }
 
   override startStep(system: MnaSystem) {
@@ -748,48 +816,22 @@ export class Bjt extends CircuitElement {
     this.collectorJunction.startStep(system);
   }
 
-  override stampStep(system: MnaSystem) {
-    const base = this.node(0);
-    const collector = this.node(1);
-    const emitter = this.node(2);
+  /** The test predicts the base and collector currents, as SPICE's does. */
+  override hasExactConvergenceTest() {
+    return true;
+  }
+
+  /**
+   * Linearizes the transistor at `vbe` and `vbc`, in real polarity: its terminal currents
+   * and their slopes go into the fields beside `lastVbe`.
+   */
+  private linearize(vbe: number, vbc: number) {
+    const { is, bf, br, vaf, forwardThermal } = this.model;
     const sign = this.polarity;
-    const is = this.params.get("is");
-    const bf = this.params.get("bf");
-    const br = this.params.get("br");
-    const vaf = this.params.get("vaf");
-    const forwardThermal = this.params.get("nf") * THERMAL_VOLTAGE;
-    const measuredVbe = (this.volts[0] ?? 0) - (this.volts[2] ?? 0);
-    const measuredVbc = (this.volts[0] ?? 0) - (this.volts[1] ?? 0);
-
-    // Newton has not converged while either junction voltage moves more than 10 mV.
-    if (
-      Math.abs(measuredVbe - this.lastVbe) > 0.01 ||
-      Math.abs(measuredVbc - this.lastVbc) > 0.01
-    ) {
-      system.converged = false;
-    }
-
-    // Damp each junction's Newton step in NPN terms, then restore the sign.
-    const vbe =
-      sign *
-      limitJunction(
-        sign * measuredVbe,
-        sign * this.lastVbe,
-        criticalVoltage(is, forwardThermal),
-        forwardThermal,
-      );
-
-    const vbc =
-      sign *
-      limitJunction(
-        sign * measuredVbc,
-        sign * this.lastVbc,
-        criticalVoltage(is, THERMAL_VOLTAGE),
-        THERMAL_VOLTAGE,
-      );
 
     this.lastVbe = vbe;
     this.lastVbc = vbc;
+    this.isLinearized = true;
 
     // Currents into each terminal of an NPN at the polarity-corrected voltages.
     const ebe = limitedExp((sign * vbe) / forwardThermal);
@@ -803,44 +845,111 @@ export class Bjt extends CircuitElement {
     const dEbe = (is * ebe) / forwardThermal;
     const dEbc = (is * ebc) / THERMAL_VOLTAGE;
     const dEarly = vaf > 0 && early > 0.1 ? -1 / vaf : 0;
-    const dCollectorBe = dEbe * early;
-    const dCollectorBc = -dEbc * early + transport * dEarly - dEbc / br;
-    const dBaseBe = dEbe / bf;
-    const dBaseBc = dEbc / br;
 
+    this.collectorSlopeBe = dEbe * early;
+    this.collectorSlopeBc = -dEbc * early + transport * dEarly - dEbc / br;
+    this.baseSlopeBe = dEbe / bf;
+    this.baseSlopeBc = dEbc / br;
     this.collectorCurrent = sign * collectorNpn;
     this.baseCurrent = sign * baseNpn;
     this.emitterCurrent = -(this.collectorCurrent + this.baseCurrent);
+  }
 
-    // Stamp each terminal's current, linearized in vbe and vbc.
-    const terminals = [
-      { node: base, current: this.baseCurrent, dBe: dBaseBe, dBc: dBaseBc },
-      {
-        node: collector,
-        current: this.collectorCurrent,
-        dBe: dCollectorBe,
-        dBc: dCollectorBc,
-      },
-      {
-        node: emitter,
-        current: this.emitterCurrent,
-        dBe: -(dBaseBe + dCollectorBe),
-        dBc: -(dBaseBc + dCollectorBc),
-      },
-    ];
+  override stampStep(system: MnaSystem) {
+    const { volts, model } = this;
+    const sign = this.polarity;
+    const measuredVbe = (volts[0] ?? 0) - (volts[2] ?? 0);
+    const measuredVbc = (volts[0] ?? 0) - (volts[1] ?? 0);
 
-    for (const terminal of terminals) {
-      system.stampMatrix(terminal.node, base, terminal.dBe + terminal.dBc);
-      system.stampMatrix(terminal.node, emitter, -terminal.dBe);
-      system.stampMatrix(terminal.node, collector, -terminal.dBc);
-      system.stampRightSide(
-        terminal.node,
-        -(terminal.current - terminal.dBe * vbe - terminal.dBc * vbc),
+    // Damp each junction's Newton step in NPN terms, then restore the sign.
+    const vbe =
+      sign *
+      limitJunction(
+        sign * measuredVbe,
+        sign * this.lastVbe,
+        model.forwardCritical,
+        model.forwardThermal,
       );
+
+    const vbc =
+      sign *
+      limitJunction(
+        sign * measuredVbc,
+        sign * this.lastVbc,
+        model.reverseCritical,
+        THERMAL_VOLTAGE,
+      );
+
+    // A step's first stamp is at the voltages the one before it ended on.
+    if (!this.isLinearized || vbe !== this.lastVbe || vbc !== this.lastVbc) {
+      const deltaBe = vbe - this.lastVbe;
+      const deltaBc = vbc - this.lastVbc;
+
+      const predictedCollector =
+        this.collectorCurrent +
+        this.collectorSlopeBe * deltaBe +
+        this.collectorSlopeBc * deltaBc;
+
+      const predictedBase =
+        this.baseCurrent +
+        this.baseSlopeBe * deltaBe +
+        this.baseSlopeBc * deltaBc;
+
+      const wasLinearized = this.isLinearized;
+
+      this.linearize(vbe, vbc);
+
+      // Converged once a step lands where the last linearization predicted both
+      // currents, as SPICE's test has it.
+      if (
+        !wasLinearized ||
+        mispredicts(this.collectorCurrent, predictedCollector) ||
+        mispredicts(this.baseCurrent, predictedBase)
+      ) {
+        system.converged = false;
+      }
     }
 
-    system.stampConductance(base, emitter, JUNCTION_GMIN);
-    system.stampConductance(base, collector, JUNCTION_GMIN);
+    // A limited step lands somewhere the solution did not.
+    if (vbe !== measuredVbe || vbc !== measuredVbc) {
+      system.converged = false;
+    }
+
+    // Stamp each terminal's current, linearized in vbe and vbc.
+    const { baseSlopeBe, baseSlopeBc, collectorSlopeBe, collectorSlopeBc } =
+      this;
+
+    const emitterSlopeBe = -(baseSlopeBe + collectorSlopeBe);
+    const emitterSlopeBc = -(baseSlopeBc + collectorSlopeBc);
+
+    system.addEntry(this.baseFromBase, baseSlopeBe + baseSlopeBc);
+    system.addEntry(this.baseFromEmitter, -baseSlopeBe);
+    system.addEntry(this.baseFromCollector, -baseSlopeBc);
+    system.addRightSide(
+      this.baseRow,
+      -(this.baseCurrent - baseSlopeBe * vbe - baseSlopeBc * vbc),
+    );
+    system.addEntry(
+      this.collectorFromBase,
+      collectorSlopeBe + collectorSlopeBc,
+    );
+    system.addEntry(this.collectorFromEmitter, -collectorSlopeBe);
+    system.addEntry(this.collectorFromCollector, -collectorSlopeBc);
+    system.addRightSide(
+      this.collectorRow,
+      -(
+        this.collectorCurrent -
+        collectorSlopeBe * vbe -
+        collectorSlopeBc * vbc
+      ),
+    );
+    system.addEntry(this.emitterFromBase, emitterSlopeBe + emitterSlopeBc);
+    system.addEntry(this.emitterFromEmitter, -emitterSlopeBe);
+    system.addEntry(this.emitterFromCollector, -emitterSlopeBc);
+    system.addRightSide(
+      this.emitterRow,
+      -(this.emitterCurrent - emitterSlopeBe * vbe - emitterSlopeBc * vbc),
+    );
     this.emitterJunction.stampStep(system);
     this.collectorJunction.stampStep(system);
   }
@@ -875,6 +984,11 @@ export class Bjt extends CircuitElement {
     super.reset();
     this.lastVbe = 0;
     this.lastVbc = 0;
+    this.isLinearized = false;
+    this.baseSlopeBe = 0;
+    this.baseSlopeBc = 0;
+    this.collectorSlopeBe = 0;
+    this.collectorSlopeBc = 0;
     this.baseCurrent = 0;
     this.collectorCurrent = 0;
     this.emitterCurrent = 0;

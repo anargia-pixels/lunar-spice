@@ -23,12 +23,14 @@ import {
 } from "@lunar-spice/simulator/geometry";
 import {
   type Bounds,
+  boundsOf,
   boundsOfElements,
   cornerOfElements,
   distanceToElement,
   flipElements,
   isInside,
   rotateElements,
+  withEnclosed,
 } from "@lunar-spice/simulator/layout";
 import {
   isOnWire,
@@ -56,6 +58,14 @@ import { selectionImage } from "./selection-image";
 import type { SimulationStatus } from "./simulation-status";
 import { findTool, SELECT_TOOL, type Tool, toolForKey } from "./tools";
 
+/** A selected part's wiper, which the canvas offers a slider for. */
+export type SelectedWiper = {
+  /** The part's designator, such as `RV1`, or its name before it has one. */
+  name: string;
+  /** From 0 to 1 along the track. */
+  position: number;
+};
+
 /** Everything the editor tells the app about. */
 export type EditorCallbacks = {
   /** After every committed edit, with the circuit in its file format. */
@@ -69,6 +79,8 @@ export type EditorCallbacks = {
   onEditRequest: (element: CircuitElement) => void;
   /** Readout lines for the hovered or selected element; null when there is none. */
   onInfo: (lines: string[] | null) => void;
+  /** The wiper of the only selected element, such as a potentiometer; null when it has none. */
+  onWiperChange: (wiper: SelectedWiper | null) => void;
   onScopesChange: (scopes: readonly Scope[]) => void;
   /** After an oscilloscope comes, goes, is renamed or has its front panel changed. */
   onOscilloscopesChange: (oscilloscopes: readonly OscilloscopeEntry[]) => void;
@@ -89,6 +101,9 @@ const ZOOM_STEP = Math.SQRT2;
 
 /** Schematic units within which a click picks an element or its end. */
 const PICK_DISTANCE = 8;
+
+/** Schematic units within which a wire wins a click over the part it runs beside. */
+const WIRE_PREFERENCE = 4;
 
 /** Schematic units within which a click on a post starts a wire from it. */
 const POST_PICK_DISTANCE = 5;
@@ -111,6 +126,12 @@ const WHEEL_ZOOM_RATE = 0.0025;
 /** Elapsed time assumed for the first frame, which has no previous one. */
 const FIRST_FRAME_MS = 16;
 
+/** How long loose ends stay flagged after the canvas is asked to show them. */
+const LOOSE_END_FLASH_MS = 2400;
+
+/** Room kept around loose ends brought into view, so their parts show too. */
+const LOOSE_END_MARGIN = 4 * GRID_SIZE;
+
 /**
  * The gesture between a press and its release: panning, moving the selection with the
  * wires attached to it, dragging a wire's end or a part's label, a rubber band, or
@@ -123,6 +144,8 @@ type Drag =
       before: Snapshot;
       origin: Point;
       applied: Point;
+      /** The selection and what its groups hold. */
+      moved: ReadonlySet<CircuitElement>;
       wires: AttachedWires;
       hasMoved: boolean;
       clicked: CircuitElement;
@@ -220,7 +243,12 @@ export class EditorController {
   private wiring: Wiring | null = null;
   /** The post under the pointer that a click with the select tool would wire from. */
   private hoveredPost: Point | null = null;
-  private looseEnds = 0;
+  /** Posts that join nothing, ringed on the schematic. */
+  private looseEnds: Point[] = [];
+  /** When the canvas was last asked to show the loose ends, in frame time. */
+  private looseEndsShownAt = Number.NEGATIVE_INFINITY;
+  /** True while loose ends are flagged, so each frame redraws them. */
+  private isFlashingLooseEnds = false;
   /** The part a placing tool shows under the pointer; a click drops a copy of it. */
   private ghost: CircuitElement | null = null;
   private isPointerInside = false;
@@ -235,6 +263,10 @@ export class EditorController {
   private lastFrameTime = 0;
   private lastInfoTime = 0;
   private isDirty = true;
+  /** True while a slider turns a wiper, so the whole turn is one undo step. */
+  private isTurningWiper = false;
+  /** True when a wiper moved since the simulation last heard of it. */
+  private hasWiperMoved = false;
   private readonly cleanups: (() => void)[] = [];
 
   constructor(
@@ -576,17 +608,128 @@ export class EditorController {
 
   // Selection
 
-  /** Reports the selection count and the readout, and redraws. */
+  /** Reports the selection count, the readout and the selected wiper, and redraws. */
   private emitSelection() {
     this.callbacks.onSelectionChange(this.selection.size);
     this.emitInfo(true);
+    this.emitWiper();
     this.invalidate();
+  }
+
+  /** The only selected element when it has a wiper; null otherwise. */
+  private get wiperElement() {
+    const [selected] = this.selection.size === 1 ? this.selection : [];
+
+    return selected === undefined || selected.wiperPosition() === null
+      ? null
+      : selected;
+  }
+
+  private emitWiper() {
+    const element = this.wiperElement;
+    const position = element?.wiperPosition() ?? null;
+
+    this.callbacks.onWiperChange(
+      element === null || position === null
+        ? null
+        : { name: element.designator || element.name(), position },
+    );
+  }
+
+  /**
+   * Moves the selected part's wiper to `position`, from 0 to 1, while the simulation
+   * runs on. A slider calls this many times a second, so the simulation hears of it once
+   * a frame, and the turn is one undo step until `finishTurningWiper`.
+   */
+  turnWiper(position: number) {
+    const element = this.wiperElement;
+
+    if (!element) {
+      return;
+    }
+
+    if (!this.isTurningWiper) {
+      this.checkpoint();
+      this.isTurningWiper = true;
+    }
+
+    element.setWiperPosition(position);
+    this.hasWiperMoved = true;
+    this.emitInfo(true);
+    this.emitWiper();
+    this.invalidate();
+  }
+
+  /** Ends a turn of the wiper; the next one is another undo step. */
+  finishTurningWiper() {
+    this.isTurningWiper = false;
   }
 
   private get selectedElements() {
     return this.circuit.elements.filter((element) =>
       this.selection.has(element),
     );
+  }
+
+  /**
+   * The selection with everything inside its groups, in file order: what moving, copying
+   * and deleting act on.
+   */
+  private get affectedElements() {
+    return withEnclosed(this.selectedElements, this.circuit.elements);
+  }
+
+  /** True when the selection holds a group, which Ungroup removes. */
+  get hasGroupSelected() {
+    return [...this.selection].some((element) => element.isEnclosure());
+  }
+
+  /**
+   * Draws a group around the selection, a grid step clear of it, and selects the group,
+   * as Excalidraw wraps a selection in a frame. The group goes first in the file, so it
+   * draws beneath what it holds.
+   */
+  groupSelection() {
+    const bounds = boundsOfElements(this.selectedElements);
+
+    if (!bounds) {
+      return;
+    }
+
+    const group = createElement(
+      "group",
+      Math.floor(bounds.left / GRID_SIZE - 1) * GRID_SIZE,
+      Math.floor(bounds.top / GRID_SIZE - 1) * GRID_SIZE,
+      Math.ceil(bounds.right / GRID_SIZE + 1) * GRID_SIZE,
+      Math.ceil(bounds.bottom / GRID_SIZE + 1) * GRID_SIZE,
+    );
+
+    this.checkpoint();
+    this.circuit.elements.unshift(group);
+    this.selection = new Set([group]);
+    this.commit();
+  }
+
+  /** Removes the selected groups, keeping what they held, which becomes the selection. */
+  ungroupSelection() {
+    const groups = this.selectedElements.filter((element) =>
+      element.isEnclosure(),
+    );
+
+    if (groups.length === 0) {
+      return;
+    }
+
+    const held = withEnclosed(groups, this.circuit.elements).filter(
+      (element) => !groups.includes(element),
+    );
+
+    this.checkpoint();
+    this.circuit.elements = this.circuit.elements.filter(
+      (element) => !groups.includes(element),
+    );
+    this.selection = new Set(held);
+    this.commit();
   }
 
   private select(elements: readonly CircuitElement[]) {
@@ -858,8 +1001,9 @@ export class EditorController {
   // Editing commands
 
   /** Applies `edit` to the selection as one undo step; nothing happens without one. */
+  /** Applies `edit` to the selection and what its groups hold, as one undo step. */
   private editSelected(edit: (elements: CircuitElement[]) => void) {
-    const elements = this.selectedElements;
+    const elements = this.affectedElements;
 
     if (elements.length === 0) {
       return;
@@ -871,9 +1015,11 @@ export class EditorController {
   }
 
   deleteSelection() {
-    this.editSelected(() => {
+    this.editSelected((elements) => {
+      const deleted = new Set(elements);
+
       this.circuit.elements = this.circuit.elements.filter(
-        (element) => !this.selection.has(element),
+        (element) => !deleted.has(element),
       );
       this.selection.clear();
     });
@@ -882,7 +1028,7 @@ export class EditorController {
   /** Moves the selection by whole grid steps. */
   moveSelection(stepsX: number, stepsY: number) {
     this.editSelected((elements) => {
-      const wires = new AttachedWires(this.circuit.elements, this.selection);
+      const wires = new AttachedWires(this.circuit.elements, new Set(elements));
       const dx = stepsX * GRID_SIZE;
       const dy = stepsY * GRID_SIZE;
 
@@ -945,7 +1091,7 @@ export class EditorController {
   }
 
   duplicateSelection() {
-    const copies = this.selectedElements.map(cloneElement);
+    const copies = this.affectedElements.map(cloneElement);
 
     for (const copy of copies) {
       copy.translate(DUPLICATE_OFFSET, DUPLICATE_OFFSET);
@@ -958,7 +1104,7 @@ export class EditorController {
 
   /** The selection in the circuit file format. */
   private selectionText() {
-    return this.selectedElements.map((element) => element.dump()).join("\n");
+    return this.affectedElements.map((element) => element.dump()).join("\n");
   }
 
   copySelection() {
@@ -977,7 +1123,7 @@ export class EditorController {
    * Safari's permission from the click.
    */
   copySelectionAsPng() {
-    const elements = this.selectedElements;
+    const elements = this.affectedElements;
     const keys = new Set(elements.flatMap((e) => e.posts().map(pointKey)));
 
     const image = selectionImage(
@@ -1108,6 +1254,18 @@ export class EditorController {
     this.camera.fitDrawing();
   }
 
+  /** Brings the posts that join nothing into view and flags them for a moment. */
+  showLooseEnds() {
+    if (this.looseEnds.length === 0) {
+      return;
+    }
+
+    this.camera.reveal(boundsOf(this.looseEnds, LOOSE_END_MARGIN));
+    this.looseEndsShownAt = performance.now();
+    this.isFlashingLooseEnds = true;
+    this.invalidate();
+  }
+
   zoomToSelection() {
     const box = boundsOfElements(this.selectedElements);
 
@@ -1122,18 +1280,30 @@ export class EditorController {
 
   // Pointer
 
-  /** The element nearest `point` within the pick distance; null when there is none. */
+  /**
+   * The element nearest `point` within the pick distance; null when there is none. As in
+   * Multisim, wires lie on top of parts: a wire that close wins even over a part the
+   * pointer is inside.
+   */
   private elementAt(point: Point) {
     let best: CircuitElement | null = null;
-    let bestDistance = PICK_DISTANCE;
+    let bestScore = Number.POSITIVE_INFINITY;
 
     for (const element of this.circuit.elements) {
       const distance = distanceToElement(element, point);
 
+      if (distance > PICK_DISTANCE) {
+        continue;
+      }
+
+      const score = element.isStretchable()
+        ? distance
+        : distance + WIRE_PREFERENCE;
+
       // Later elements draw on top, so they win ties.
-      if (distance <= bestDistance) {
+      if (score <= bestScore) {
         best = element;
-        bestDistance = distance;
+        bestScore = score;
       }
     }
 
@@ -1161,7 +1331,7 @@ export class EditorController {
   private endAt(point: Point) {
     const [element] = this.selection.size === 1 ? this.selection : [];
 
-    if (!element?.isStretchable()) {
+    if (!element?.isStretchable() && !element?.isEnclosure()) {
       return null;
     }
 
@@ -1253,10 +1423,12 @@ export class EditorController {
       };
     }
 
-    // A press on a part's label selects the part and drags the label.
+    // A press on a part's label selects the part and drags the label; a group's title
+    // is a handle for the group instead, as Excalidraw's frame names are.
     const labelOwner = isShift ? null : this.labelAt(point);
+    const titled = labelOwner?.isEnclosure() ? labelOwner : null;
 
-    if (labelOwner) {
+    if (labelOwner && !titled) {
       if (!this.selection.has(labelOwner) || this.selection.size !== 1) {
         this.select([labelOwner]);
       }
@@ -1282,7 +1454,7 @@ export class EditorController {
     }
 
     // A press on empty canvas starts a rubber band; Shift adds to the selection.
-    const element = this.elementAt(point);
+    const element = titled ?? this.elementAt(point);
 
     if (!element) {
       if (!isShift) {
@@ -1316,12 +1488,15 @@ export class EditorController {
       this.select([element]);
     }
 
+    const moved = new Set(this.affectedElements);
+
     return {
       kind: "move",
       before: snapshotOf(this.circuit.elements),
       origin: snapped(point),
       applied: snapped(point),
-      wires: new AttachedWires(this.circuit.elements, this.selection),
+      moved,
+      wires: new AttachedWires(this.circuit.elements, moved),
       hasMoved: false,
       clicked: element,
     };
@@ -1382,7 +1557,7 @@ export class EditorController {
         const dy = at.y - drag.applied.y;
 
         if (dx !== 0 || dy !== 0) {
-          for (const element of this.selection) {
+          for (const element of drag.moved) {
             element.translate(dx, dy);
           }
 
@@ -1628,15 +1803,15 @@ export class EditorController {
     this.posts = [...counts.values()];
 
     // A post on a wire's middle joins it once the edit is finished.
-    const looseEnds = this.posts.filter(
-      ({ point, count }) =>
-        count === 1 && !isOnWire(this.circuit.elements, point),
-    ).length;
+    const looseEnds = this.posts.flatMap(({ point, count }) =>
+      count === 1 && !isOnWire(this.circuit.elements, point) ? [point] : [],
+    );
 
-    if (looseEnds !== this.looseEnds) {
-      this.looseEnds = looseEnds;
-      this.callbacks.onLooseEndsChange(looseEnds);
+    if (looseEnds.length !== this.looseEnds.length) {
+      this.callbacks.onLooseEndsChange(looseEnds.length);
     }
+
+    this.looseEnds = looseEnds;
 
     this.invalidate();
   }
@@ -1776,23 +1951,44 @@ export class EditorController {
 
     this.lastFrameTime = now;
 
+    if (this.hasWiperMoved) {
+      this.hasWiperMoved = false;
+      this.run.rebuild(this.circuit);
+      this.callbacks.onChange(this.circuit.dump());
+    }
+
     if (this.run.runFrame(elapsed, this.display.showCurrentDots)) {
       this.emitInfo(false);
       this.invalidate();
     }
 
+    // Redraws each frame of the flash, and once more after it to clear it.
+    if (this.isFlashingLooseEnds) {
+      this.isFlashingLooseEnds = this.looseEndFlash(now) !== null;
+      this.invalidate();
+    }
+
     if (this.isDirty) {
       this.isDirty = false;
-      this.render();
+      this.render(now);
     }
 
     this.frame = requestAnimationFrame(this.tick);
   };
 
+  /** How far through flagging the loose ends the canvas is at `now`, 0 to 1; null when done. */
+  private looseEndFlash(now: number) {
+    const progress = (now - this.looseEndsShownAt) / LOOSE_END_FLASH_MS;
+
+    // A frame's time can fall just before the click that started the flash.
+    return progress < 1 ? Math.max(progress, 0) : null;
+  }
+
   /** Draws the schematic with the gesture, ghost, hovered net and voltage tags. */
-  private render() {
+  private render(now: number) {
     const { drag } = this;
     const hoveredNet = drag ? null : this.netOf(this.hovered);
+    const flash = this.looseEndFlash(now);
 
     renderScene(this.painter, this.camera, window.devicePixelRatio || 1, {
       elements: this.circuit.elements,
@@ -1804,6 +2000,15 @@ export class EditorController {
       band:
         drag?.kind === "band" ? boxBetween(drag.origin, drag.current) : null,
       posts: this.posts,
+      looseEndFlash:
+        flash === null
+          ? null
+          : {
+              points: this.looseEnds,
+              progress: flash,
+              isMoving: !window.matchMedia("(prefers-reduced-motion: reduce)")
+                .matches,
+            },
       hoveredNet:
         hoveredNet === null
           ? []

@@ -71,6 +71,15 @@ describe("potentiometer", () => {
     expect(wiper).toEqual({ x: 16, y: 50 });
   });
 
+  test("keeps its wiper post in place as the wiper moves", () => {
+    const potentiometer = new Potentiometer(0, 0, 0, 100);
+
+    potentiometer.position = 0.1;
+    expect(potentiometer.posts()[2]).toEqual({ x: 16, y: 50 });
+    potentiometer.position = 0.9;
+    expect(potentiometer.posts()[2]).toEqual({ x: 16, y: 50 });
+  });
+
   test("round-trips Falstad's type and slider label", () => {
     const line = "174 0 0 0 100 0 1000 0.25 Pot";
     const parsed = readElementLine(line);

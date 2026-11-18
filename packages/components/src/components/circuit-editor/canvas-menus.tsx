@@ -94,6 +94,16 @@ export function EditMenuItems({
         onClick={() => controller?.deleteSelection()}
       />
       <CommandItem
+        command="group"
+        disabled={!hasSelection}
+        onClick={() => controller?.groupSelection()}
+      />
+      <CommandItem
+        command="ungroup"
+        disabled={!controller?.hasGroupSelected}
+        onClick={() => controller?.ungroupSelection()}
+      />
+      <CommandItem
         command="edit"
         label="Edit properties…"
         disabled={controller?.selectionCount !== 1}

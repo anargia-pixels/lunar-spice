@@ -281,6 +281,11 @@ export class RunEngine {
     this.sound.write(samples);
   }
 
+  /** Sets the sound clip the microphone `elementId` plays; null forgets it. */
+  setClip(elementId: number, samples: Float32Array | null, sampleRate: number) {
+    this.sound.setClip(elementId, samples, sampleRate);
+  }
+
   /**
    * Steps for the real time since the last call at the set speed, for at most `budgetMs`.
    * Returns true when it ran out of budget: the circuit is behind real time, and the

@@ -116,8 +116,37 @@ export class Camera {
     this.isFittedToDrawing = true;
   }
 
-  /** Fits `box` between the floating controls; with no box, centers the origin at 1:1. */
-  fit(box: Bounds | null) {
+  /**
+   * Brings `box` into view between the floating controls, panning and zooming out only
+   * as far as it needs; a box already in view leaves the view alone.
+   */
+  reveal(box: Bounds) {
+    const topLeft = this.toWorld({
+      x: FIT_GUTTER,
+      y: this.insets.top + FIT_GUTTER,
+    });
+
+    const bottomRight = this.toWorld({
+      x: this.size.width - this.insets.right - FIT_GUTTER,
+      y: this.size.height - this.insets.bottom - FIT_GUTTER,
+    });
+
+    const isInView =
+      box.left >= topLeft.x &&
+      box.top >= topLeft.y &&
+      box.right <= bottomRight.x &&
+      box.bottom <= bottomRight.y;
+
+    if (!isInView) {
+      this.fit(box, this.scaleValue);
+    }
+  }
+
+  /**
+   * Fits `box` between the floating controls, magnifying no more than `maxScale`; with
+   * no box, centers the origin at 1:1.
+   */
+  fit(box: Bounds | null, maxScale = MAX_FIT_SCALE) {
     const { width, height } = this.size;
 
     this.isFittedToDrawing = false;
@@ -136,7 +165,7 @@ export class Camera {
     const roomWidth = width - this.insets.right - 2 * FIT_GUTTER;
 
     const scale = Math.min(
-      MAX_FIT_SCALE,
+      maxScale,
       Math.max(
         MIN_SCALE,
         Math.min(

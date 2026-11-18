@@ -20,12 +20,14 @@ LM337, NE555, …), paste a vendor SPICE `.model` card, or type the values yours
 Resistor · capacitor (ESR) · inductor (DCR) · DC and AC sources (internal resistance) ·
 rail · current source · switch, push switch (normally open or closed) and changeover
 switch · diode and Zener · LED · NPN/PNP · N/P-channel MOSFET · N/P-channel JFET · op-amp
-(gain, GBW, slew rate, Rin, Rout, offset, swing) · Schmitt trigger, buffer or inverter
+(gain, GBW, slew rate, Rin, Rout, offset, swing; VCC and VEE pins, with its output
+swinging to each supply less the datasheet's drop) · Schmitt trigger, buffer or inverter
 (thresholds, output levels, output resistance, slew rate) · fixed regulator (7805-style) ·
 adjustable regulator (LM317-style) · 555 timer · electret microphone (live from your
-microphone, or a test tone) · speaker (plays through your speakers) · voltmeter · voltage
-probe (to ground, with V(p-p), V(rms), V(dc) and frequency, as in Multisim) · oscilloscope
-(four channels against COM) · net label · ground.
+microphone, a test tone, or a clip you record or open, played on repeat) · speaker (plays
+through your speakers) · voltmeter · voltage probe (to ground, with V(p-p), V(rms), V(dc)
+and frequency, as in Multisim) · oscilloscope (four channels against COM) · net label ·
+ground.
 
 Parts have a fixed size, as in Multisim: a click places one, and `[` `]`, H and V turn or
 mirror it before you click. Only wires stretch. A voltage probe rests on any wire or post
@@ -43,9 +45,10 @@ and it ends on the pin or wire you click, on a double-click, or with a right-cli
 Escape. With the select tool, a click on a pin starts a wire from it. A wire or pin that
 lands on the middle of another wire joins it; wires that only cross stay apart. A wire
 drawn over another, or wires that meet in a straight line with nothing else at the joint,
-become one wire. Ends that join nothing are ringed and counted under the canvas. Moving a
-part keeps it connected: its wires stretch along, with a right-angle bend where they would
-run at a slant, and a part that touched it directly gets a new wire.
+become one wire. Ends that join nothing are ringed and counted under the canvas; click the
+count to bring them into view and flag them. Moving a part keeps it connected: its wires
+stretch along, with a right-angle bend where they would run at a slant, and a part that
+touched it directly gets a new wire.
 
 Each part's name and value can be dragged to a clearer spot, and its name changed in its
 properties (`R1` can become `Rload`). Schematic text uses Poppins or JetBrains Mono, from
@@ -54,6 +57,11 @@ Appearances › Grid style. Settings › Appearances › Show net names tags eac
 name results use, such as `n12`; drag a tag to move it. Right-click a selection and choose
 Copy as PNG (`Alt+Shift+C`) to paste a picture of it into a document or chat, as in
 Excalidraw.
+
+Ctrl+G draws a titled outline around the selection, like an Excalidraw frame: drag it by
+its border or title and whatever lies inside moves, copies and deletes with it. Drag its
+corners to resize it, double-click it to rename it, and Ctrl+Shift+G removes the outline
+and keeps the parts. Falstad's boxes open as groups.
 
 ## Files
 

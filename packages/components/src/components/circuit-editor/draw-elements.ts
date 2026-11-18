@@ -9,6 +9,7 @@ import {
   THROW_OFFSET,
   VoltageProbe,
 } from "@lunar-spice/simulator/elements/connectors";
+import { Group } from "@lunar-spice/simulator/elements/group";
 import {
   TIMER_PINS,
   TIMER_SIZE,
@@ -72,6 +73,21 @@ export type ElementLook = {
 const LINE_WIDTH = 2;
 
 const LABEL_SIZE = 11;
+
+/** Width of a group's outline, thinner than a wire so it never reads as one. */
+const GROUP_LINE_WIDTH = 1;
+
+/** Corner radius of a group's outline. */
+const GROUP_RADIUS = 6;
+
+/** Radius of the disc on a flagged loose end. */
+const LOOSE_END_FLAG_RADIUS = 8;
+
+/** How many rings ripple out of a flagged loose end. */
+const LOOSE_END_RIPPLES = 3;
+
+/** How far past its disc a ripple spreads before it fades out. */
+const LOOSE_END_RIPPLE_REACH = 16;
 
 /** How long a voltage probe's head is, back from its end toward its post. */
 const PROBE_HEAD = 18;
@@ -185,6 +201,7 @@ export class SchematicPainter {
     "adjustable-regulator": (element) => this.drawRegulator(element),
     timer: (element) => this.drawTimer(element),
     oscilloscope: (element) => this.drawOscilloscope(element),
+    group: (element) => this.drawGroup(element),
   };
   /** The current along each path of the element being drawn. */
   private pathCurrents: readonly number[] = [];
@@ -457,6 +474,38 @@ export class SchematicPainter {
     this.drawers[element.kind](element);
   }
 
+  /**
+   * A thin rounded outline from corner to corner, as Excalidraw draws a frame, with the
+   * title above its top-left corner.
+   */
+  private drawGroup(element: CircuitElement) {
+    const { start, end } = element;
+    const left = Math.min(start.x, end.x);
+    const top = Math.min(start.y, end.y);
+    const { context } = this;
+
+    context.lineWidth = GROUP_LINE_WIDTH;
+    context.strokeStyle = this.look.accent ?? rgbText(this.palette.muted);
+    context.beginPath();
+    context.roundRect(
+      left,
+      top,
+      Math.abs(end.x - start.x),
+      Math.abs(end.y - start.y),
+      GROUP_RADIUS,
+    );
+    context.stroke();
+
+    if (element instanceof Group) {
+      this.partLabel(
+        element,
+        element.titleText,
+        { x: left + 2, y: top - LABEL_SIZE / 2 - 3 },
+        "left",
+      );
+    }
+  }
+
   private drawWire(element: CircuitElement) {
     const [voltage = 0] = element.volts;
 
@@ -668,8 +717,12 @@ export class SchematicPainter {
     this.drawResistorBody(a, b, first, second);
 
     if (wiperPost) {
-      this.arrow(wiperPost, contact, this.voltageColor(wiper));
-      this.dots([wiperPost, contact], 2);
+      const bend = element.wiperBend();
+      const color = this.voltageColor(wiper);
+
+      this.line(wiperPost, bend, color);
+      this.arrow(bend, contact, color);
+      this.dots([wiperPost, bend, contact], 2);
     }
 
     this.dots([element.start, contact], 0);
@@ -1235,8 +1288,8 @@ export class SchematicPainter {
       return;
     }
 
-    const [inverting, nonInverting, output] = element.posts();
-    const [vm = 0, vp = 0, vo = 0] = element.volts;
+    const [inverting, nonInverting, output, vcc, vee] = element.posts();
+    const [vm = 0, vp = 0, vo = 0, vccVolts = 0, veeVolts = 0] = element.volts;
 
     if (!inverting || !nonInverting || !output) {
       return;
@@ -1259,11 +1312,7 @@ export class SchematicPainter {
 
     const { context } = this;
 
-    const corners = [
-      interpolate(baseCenter, tip, 0, 32),
-      interpolate(baseCenter, tip, 0, -32),
-      tip,
-    ];
+    const corners = element.bodyOutline();
 
     context.strokeStyle = this.outlineColor();
     context.beginPath();
@@ -1277,10 +1326,32 @@ export class SchematicPainter {
     this.line(inverting, invertingBase, this.voltageColor(vm));
     this.line(nonInverting, nonInvertingBase, this.voltageColor(vp));
     this.line(tip, output, this.voltageColor(vo));
+
+    if (vcc && vee) {
+      const [vccEnd, veeEnd] = element.supplyLeadEnds();
+
+      this.line(vcc, vccEnd, this.voltageColor(vccVolts));
+      this.line(vee, veeEnd, this.voltageColor(veeVolts));
+    }
+
     this.text("−", interpolate(invertingBase, tip, 0.12), "center", 14);
     this.text("+", interpolate(nonInvertingBase, tip, 0.12), "center", 14);
     this.dots([tip, output], 2);
-    this.sideLabel(element, interpolate(baseCenter, tip, 0.5), 38);
+
+    const middle = interpolate(baseCenter, tip, 0.5);
+    const toward = Math.sign(tip.x - baseCenter.x);
+
+    // Beside the VCC lead on the output's side, which a label above the middle would cross.
+    if (vcc && toward !== 0) {
+      this.sideLabel(
+        element,
+        { x: vcc.x + 8 * toward, y: middle.y },
+        28,
+        toward > 0 ? "left" : "right",
+      );
+    } else {
+      this.sideLabel(element, middle, 38);
+    }
   }
 
   /** A buffer triangle with the hysteresis loop inside, and a bubble when it inverts. */
@@ -1560,15 +1631,22 @@ export class SchematicPainter {
   }
 
   /** Designator and part name above `at`, for multi-post parts. */
-  private sideLabel(element: CircuitElement, at: Point, reach: number) {
+  private sideLabel(
+    element: CircuitElement,
+    at: Point,
+    reach: number,
+    align: CanvasTextAlign = "center",
+  ) {
     if (!this.options.showValues) {
       return;
     }
 
-    this.partLabel(element, labelLines(element).join("  "), {
-      x: at.x,
-      y: at.y - reach - 4,
-    });
+    this.partLabel(
+      element,
+      labelLines(element).join("  "),
+      { x: at.x, y: at.y - reach - 4 },
+      align,
+    );
   }
 
   // Overlays
@@ -1591,6 +1669,44 @@ export class SchematicPainter {
       context.arc(point.x, point.y, 3, 0, 2 * Math.PI);
       context.stroke();
     }
+  }
+
+  /**
+   * A loose end flagged for the user to find: a red disc with a ring rippling out of
+   * it, `progress` from 0 to 1 through the flag, which fades over its last quarter.
+   * `isMoving` false keeps the disc and drops the ripple, for reduced motion.
+   */
+  looseEndFlag(point: Point, progress: number, isMoving: boolean) {
+    const { context } = this;
+    const fade = Math.min(1, 4 * (1 - progress));
+
+    context.save();
+    context.strokeStyle = this.palette.destructive;
+    context.fillStyle = this.palette.destructive;
+    context.lineWidth = 2;
+    context.globalAlpha = 0.2 * fade;
+    context.beginPath();
+    context.arc(point.x, point.y, LOOSE_END_FLAG_RADIUS, 0, 2 * Math.PI);
+    context.fill();
+    context.globalAlpha = fade;
+    context.stroke();
+
+    if (isMoving) {
+      const ripple = (progress * LOOSE_END_RIPPLES) % 1;
+
+      context.globalAlpha = fade * (1 - ripple);
+      context.beginPath();
+      context.arc(
+        point.x,
+        point.y,
+        LOOSE_END_FLAG_RADIUS + ripple * LOOSE_END_RIPPLE_REACH,
+        0,
+        2 * Math.PI,
+      );
+      context.stroke();
+    }
+
+    context.restore();
   }
 
   /** A ring around the point where a click would join or start a wire. */

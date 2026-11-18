@@ -90,6 +90,11 @@ export class MnaSystem {
   iteration = 0;
   time = 0;
   timeStep: number;
+  /**
+   * The step of the simulation this one takes shorter steps within, or its own: an
+   * element may skip detail far shorter than the steps it is watched at.
+   */
+  outerTimeStep: number;
   /** Scales every independent source; DC solves ramp it to find hard operating points. */
   sourceScale = 1;
   private phase = BASE;
@@ -113,6 +118,7 @@ export class MnaSystem {
     this.size = Math.max(0, nodeCount - 1) + branchCount;
     this.mode = mode;
     this.timeStep = timeStep;
+    this.outerTimeStep = timeStep;
     this.base = new Float64Array(this.size * this.size + 1);
     this.baseRhs = new Float64Array(this.size + 1);
     this.matrix = new Float64Array(this.size * this.size + 1);

@@ -1,4 +1,11 @@
-import { CircuitElement, type EditField, type TokenReader } from "../element";
+import {
+  CircuitElement,
+  type EditField,
+  escapeText,
+  type SoundClip,
+  type TokenReader,
+  unescapeText,
+} from "../element";
 import {
   type AcSystem,
   type AnalysisMode,
@@ -13,6 +20,7 @@ import { formatSi } from "../units";
 const SOUND_INPUTS = [
   { value: "live", label: "Live microphone" },
   { value: "tone", label: "Test tone" },
+  { value: "clip", label: "Sound clip" },
 ] as const;
 
 type SoundInput = (typeof SOUND_INPUTS)[number]["value"];
@@ -68,8 +76,9 @@ const MICROPHONE_PRESETS: readonly Preset[] = [
  * An electret condenser microphone: the capsule drives the gate of a JFET inside the can,
  * so it behaves as a sound-controlled current sink from its + post to its − post. Like the
  * real part it needs a bias resistor to a supply; the output is the voltage at +. Sound
- * comes from the computer's microphone (`liveInput`) or a test tone. Analyses cannot hear
- * a live microphone, so they use the tone.
+ * comes from the computer's microphone, a sound clip played on repeat (both through
+ * `soundInput`), or a test tone. Analyses hear neither the microphone nor the clip, so
+ * they use the tone.
  */
 export class Microphone extends CircuitElement {
   readonly kind = "microphone";
@@ -78,13 +87,15 @@ export class Microphone extends CircuitElement {
   readonly params = new ParamSet(MICROPHONE_SPECS, MICROPHONE_PRESETS);
   sound: SoundInput = "live";
   toneFrequency = 1000;
-  /** Peak pressure of the tone, and of a full-scale sample from the live input. */
+  /** Peak pressure of the tone, and of a full-scale sample from the microphone or clip. */
   pressure = 1;
+  /** The sound clip it plays on repeat when `sound` is "clip"; kept when another is picked. */
+  clip: SoundClip | null = null;
   /**
-   * The live input's sample at a simulated time, from −1 to 1. Set by the interactive
-   * simulation; null in analyses.
+   * The computer's sound at a simulated time, from −1 to 1: the live microphone's, or the
+   * clip's. Set by the interactive simulation; null in analyses.
    */
-  liveInput: ((time: number) => number) | null = null;
+  soundInput: ((time: number) => number) | null = null;
   /** The terminal voltage and drain current last linearized at, and the current and slope there. */
   private lastVoltage = 0;
   private lastDrain = 0;
@@ -125,6 +136,11 @@ export class Microphone extends CircuitElement {
     microphone.pressure = reader.number(1);
     microphone.params.read(reader);
 
+    const name = reader.string("");
+    const data = reader.string("");
+
+    microphone.clip = data ? { name: unescapeText(name), data } : null;
+
     return microphone;
   }
 
@@ -150,8 +166,8 @@ export class Microphone extends CircuitElement {
 
   /** Sound pressure at the capsule at `time`, in pascals. */
   pressureAt(time: number) {
-    if (this.sound === "live" && this.liveInput) {
-      return this.pressure * Math.max(-1, Math.min(1, this.liveInput(time)));
+    if (this.sound !== "tone" && this.soundInput) {
+      return this.pressure * Math.max(-1, Math.min(1, this.soundInput(time)));
     }
 
     return this.pressure * Math.sin(2 * Math.PI * this.toneFrequency * time);
@@ -293,6 +309,20 @@ export class Microphone extends CircuitElement {
             this.sound;
         },
       },
+      ...(this.sound === "clip"
+        ? [
+            {
+              kind: "clip",
+              key: "clip",
+              label: "Sound clip",
+              value: this.clip,
+              hint: "Record one or pick an audio file. It plays on repeat.",
+              set: (clip) => {
+                this.clip = clip;
+              },
+            } satisfies EditField,
+          ]
+        : []),
       {
         kind: "number",
         key: "pressure",
@@ -300,7 +330,7 @@ export class Microphone extends CircuitElement {
         unit: "Pa",
         value: this.pressure,
         range: "positive",
-        hint: "The tone's peak, and a full-scale live sample's. 1 Pa is 94 dB SPL.",
+        hint: "The tone's peak, and a full-scale sample's from the microphone or clip. 1 Pa is 94 dB SPL.",
         set: (value) => {
           this.pressure = value;
         },
@@ -326,6 +356,10 @@ export class Microphone extends CircuitElement {
       this.toneFrequency,
       this.pressure,
       ...this.params.dump(),
+      // A name is never empty, so it always takes a token.
+      ...(this.clip
+        ? [escapeText(this.clip.name || "Clip"), this.clip.data]
+        : []),
     ];
   }
 }

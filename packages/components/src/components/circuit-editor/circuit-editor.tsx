@@ -1,6 +1,8 @@
 import {
   ChartLineData01Icon,
   Copy01Icon,
+  GroupItemsIcon,
+  UngroupItemsIcon,
   Delete02Icon,
   FlipHorizontalIcon,
   FlipVerticalIcon,
@@ -36,6 +38,7 @@ import {
   DropdownMenuTrigger,
 } from "@lunar-spice/components/ui/dropdown-menu";
 import { Separator } from "@lunar-spice/components/ui/separator";
+import { Slider } from "@lunar-spice/components/ui/slider";
 import { toast } from "@lunar-spice/components/ui/toast";
 import { Toggle } from "@lunar-spice/components/ui/toggle";
 import type { OperatingPointResult } from "@lunar-spice/simulator/analyses";
@@ -62,7 +65,7 @@ import {
   commandText,
 } from "./commands";
 import type { DisplayOptions } from "./display-options";
-import { EditorController } from "./editor-controller";
+import { EditorController, type SelectedWiper } from "./editor-controller";
 import { ElementDialog } from "./element-dialog";
 import { ComboKeys, ShortcutsDialog } from "./shortcuts-dialog";
 import type { SimulationStatus } from "./simulation-status";
@@ -277,6 +280,49 @@ function CommandButton({
 }
 
 /**
+ * A slider for the selected part's wiper, such as a potentiometer's. It turns the wiper
+ * as it moves, while the simulation runs, and each drag is one undo step.
+ */
+function WiperSlider({
+  wiper,
+  onTurn,
+  onFinish,
+}: {
+  wiper: SelectedWiper;
+  onTurn: (position: number) => void;
+  onFinish: () => void;
+}) {
+  const percent = wiper.position * 100;
+  const label = `${wiper.name} wiper`;
+
+  return (
+    <div className="bg-card shadow-floating pointer-events-auto flex w-56 flex-col gap-2 rounded-lg px-3 py-2 text-xs">
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate font-medium">{label}</span>
+        <output className="text-muted-foreground tabular-nums">
+          {`${Number(percent.toFixed(1))}%`}
+        </output>
+      </div>
+      <Slider
+        aria-label={label}
+        min={0}
+        max={100}
+        step={0.5}
+        value={percent}
+        onValueChange={(value) => {
+          const [first] = Array.isArray(value) ? value : [value];
+
+          if (first !== undefined) {
+            onTurn(first / 100);
+          }
+        }}
+        onValueCommitted={onFinish}
+      />
+    </div>
+  );
+}
+
+/**
  * The schematic editor: a canvas with the tool bar, run controls, zoom and history
  * buttons, a readout of the hovered part, its context menu and its dialogs. It opens
  * `text` whenever `circuitKey` changes and reports edits through `onChange`; the
@@ -328,6 +374,7 @@ export function CircuitEditor({
   const [zoom, setZoom] = useState(1);
   const [history, setHistory] = useState({ canUndo: false, canRedo: false });
   const [info, setInfo] = useState<string[] | null>(null);
+  const [wiper, setWiper] = useState<SelectedWiper | null>(null);
   const [editing, setEditing] = useState<CircuitElement | null>(null);
   const [menuTarget, setMenuTarget] = useState<CircuitElement | null>(null);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
@@ -376,6 +423,7 @@ export function CircuitEditor({
         onHistoryChange: (canUndo, canRedo) => setHistory({ canUndo, canRedo }),
         onEditRequest: setEditing,
         onInfo: setInfo,
+        onWiperChange: setWiper,
         onScopesChange: (scopes) => latest.current.onScopesChange(scopes),
         onOscilloscopesChange: (oscilloscopes) =>
           latest.current.onOscilloscopesChange(oscilloscopes),
@@ -608,6 +656,24 @@ export function CircuitEditor({
                     {commandText("duplicate")}
                   </ContextMenuShortcut>
                 </ContextMenuItem>
+                <ContextMenuItem onClick={() => controller?.groupSelection()}>
+                  <HugeiconsIcon icon={GroupItemsIcon} strokeWidth={2} />
+                  {commandLabel("group")}
+                  <ContextMenuShortcut>
+                    {commandText("group")}
+                  </ContextMenuShortcut>
+                </ContextMenuItem>
+                {controller?.hasGroupSelected && (
+                  <ContextMenuItem
+                    onClick={() => controller.ungroupSelection()}
+                  >
+                    <HugeiconsIcon icon={UngroupItemsIcon} strokeWidth={2} />
+                    {commandLabel("ungroup")}
+                    <ContextMenuShortcut>
+                      {commandText("ungroup")}
+                    </ContextMenuShortcut>
+                  </ContextMenuItem>
+                )}
                 <ContextMenuSeparator />
                 <ContextMenuItem
                   onClick={() => controller?.copySelectionAsPng()}
@@ -737,17 +803,27 @@ export function CircuitEditor({
               </span>
             )}
             {looseEnds > 0 && (
-              <output
-                aria-label="Unconnected ends"
-                title="Ends that join nothing are ringed on the schematic."
-                className="text-destructive"
-              >
-                {looseEnds === 1
-                  ? "1 unconnected end"
-                  : `${looseEnds} unconnected ends`}
-              </output>
+              <Hint label="Show them on the schematic" side="top">
+                <Button
+                  variant="link"
+                  className="pointer-events-auto"
+                  onClick={() => controller?.showLooseEnds()}
+                >
+                  {looseEnds === 1
+                    ? "1 unconnected end"
+                    : `${looseEnds} unconnected ends`}
+                </Button>
+              </Hint>
             )}
           </div>
+          {/* Before the spacer, so the readout's changing width does not move it. */}
+          {wiper && (
+            <WiperSlider
+              wiper={wiper}
+              onTurn={(position) => controller?.turnWiper(position)}
+              onFinish={() => controller?.finishTurningWiper()}
+            />
+          )}
           <div className="flex-1" />
           {info && (
             <output

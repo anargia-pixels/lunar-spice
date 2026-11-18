@@ -19,7 +19,7 @@ function header() {
   return settingsLine(settingsForSpeed(0.01));
 }
 
-const LM741 = "LM741\\s(±15\\sV) 200000 1000000 0.5 2000000 75 0.001 13 -13";
+const LM741 = "LM741 200000 1000000 0.5 2000000 75 0.001 13 -13";
 
 const HC14 = "74HC14\\s(4.5\\sV) 2.38 1.4 4.5 0 45 500";
 

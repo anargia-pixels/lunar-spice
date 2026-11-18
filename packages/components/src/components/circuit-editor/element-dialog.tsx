@@ -39,6 +39,8 @@ import {
 import { formatEditValue, parseSi } from "@lunar-spice/simulator/units";
 import { useId, useState } from "react";
 
+import { SoundClipField } from "./sound-clip-field";
+
 /** A value with its unit, typed with SI prefixes such as 4.7k or 10u. */
 function NumberField({
   field,
@@ -340,6 +342,14 @@ function ElementForm({
             case "spice":
               return (
                 <SpiceField key={field.key} field={field} onApplied={refresh} />
+              );
+            case "clip":
+              return (
+                <SoundClipField
+                  key={field.key}
+                  field={field}
+                  onChange={refresh}
+                />
               );
           }
         })}

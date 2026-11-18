@@ -70,10 +70,22 @@ describe("layout", () => {
     expect(distanceToElement(element, { x: 16, y: -26 })).toBe(10);
   });
 
-  test("an op-amp is still picked on its body beyond its posts", () => {
+  test("an op-amp is picked on its triangle and leads, not beside its inputs", () => {
     const [opAmp] = Circuit.parse("a 0 0 64 0 0 15 -15 1000000 0 0").elements;
 
-    expect(opAmp && distanceToElement(opAmp, { x: -10, y: 0 })).toBe(0);
+    if (!opAmp) {
+      throw new Error("Expected an op-amp");
+    }
+
+    // Inputs at (0, ±16) with leads to the triangle's back at x = 16; its tip at
+    // (48, 0) leads to the output at (64, 0).
+    expect(distanceToElement(opAmp, { x: 32, y: 0 })).toBe(0);
+    expect(distanceToElement(opAmp, { x: 16, y: 30 })).toBe(0);
+    expect(distanceToElement(opAmp, { x: 8, y: 16 })).toBe(0);
+    expect(distanceToElement(opAmp, { x: 56, y: 0 })).toBe(0);
+    // A wire shorting the inputs runs from (0, -16) to (0, 16), 16 from the op-amp.
+    expect(distanceToElement(opAmp, { x: 0, y: 0 })).toBe(16);
+    expect(distanceToElement(opAmp, { x: 60, y: 30 })).toBeGreaterThan(8);
   });
 
   test("four quarter turns bring a transistor back", () => {

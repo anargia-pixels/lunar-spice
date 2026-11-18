@@ -43,4 +43,9 @@ _Avoid_: scope, for this part
 
 **Trace**:
 One plotted quantity in an analysis result, such as `V(out)` or `I(R1)`.
+
+**Group**:
+A titled outline around part of a schematic, like an Excalidraw frame. It holds whatever
+lies wholly inside it, which moves, copies and deletes with it. Saved as Falstad's box.
+_Avoid_: frame, box
 <!-- prettier-ignore-end -->

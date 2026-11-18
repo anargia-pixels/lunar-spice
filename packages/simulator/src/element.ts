@@ -31,7 +31,8 @@ export type ElementKind =
   | "timer"
   | "microphone"
   | "speaker"
-  | "oscilloscope";
+  | "oscilloscope"
+  | "group";
 
 /** Which numbers a value accepts: above 0, 0 and above (0 turns it off), or any. */
 export type ValueRange = "positive" | "nonnegative" | "any";
@@ -97,7 +98,25 @@ export type EditField =
       /** A pasted SPICE `.model` card; `set` returns why it could not be used, or null. */
       kind: "spice";
       set: (text: string) => string | null;
+    })
+  | (FieldBase & {
+      /** A sound recorded or picked from a file; null for none. */
+      kind: "clip";
+      value: SoundClip | null;
+      set: (clip: SoundClip | null) => void;
     });
+
+/**
+ * A sound kept in the circuit file as the audio file it came from, such as a recording
+ * from the computer's microphone. The engine has no audio decoder, so the editor decodes
+ * it for interactive runs.
+ */
+export type SoundClip = {
+  /** What it is called: the file's name, or "Recording". */
+  name: string;
+  /** The audio file's bytes in base64. */
+  data: string;
+};
 
 /**
  * Set on elements written by Lunar Spice whose lines carry more values than Falstad's, such
@@ -318,8 +337,26 @@ export abstract class CircuitElement {
     return 12;
   }
 
+  /**
+   * The outline of its body as drawn, a polygon, for hit tests: a click picks it inside
+   * the outline or on a lead from a post to it. Null for parts that use the box
+   * `bodyMargin` gives instead.
+   */
+  bodyOutline(): readonly Point[] | null {
+    return null;
+  }
+
   /** True when it stretches to wherever it is drawn, like a wire; parts keep their size. */
   isStretchable() {
+    return false;
+  }
+
+  /**
+   * True for an outline around other elements, spanning from its start to its end
+   * corner, such as a group: it is picked by its border, resized by its corners, and
+   * what lies inside it moves, copies and deletes with it.
+   */
+  isEnclosure() {
     return false;
   }
 
@@ -341,6 +378,17 @@ export abstract class CircuitElement {
 
   /** Holds a push button down or lets it go; other elements ignore it. */
   press(_isDown: boolean) {}
+
+  /**
+   * Where its wiper sits along its track, from 0 to 1, for parts turned by hand like a
+   * potentiometer; null for parts without one.
+   */
+  wiperPosition(): number | null {
+    return null;
+  }
+
+  /** Moves the wiper to `position`, from 0 to 1; parts without one ignore it. */
+  setWiperPosition(_position: number) {}
 
   /** True when it drives AC sweeps, like a sine source. */
   drivesAc() {

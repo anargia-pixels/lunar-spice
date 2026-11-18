@@ -172,7 +172,7 @@ describe("DC operating point", () => {
     opAmp
       ?.editFields()
       .find(({ kind }) => kind === "preset")
-      ?.set("LM393 (±15 V)");
+      ?.set("LM393");
 
     /** The comparator with `input` volts on its non-inverting input, the other grounded. */
     const comparing = (input: number) =>
@@ -185,11 +185,11 @@ describe("DC operating point", () => {
         "207 160 16 192 16 0 out",
       );
 
-    // The swing limiter holds a saturated output 1/1000 of the 15 V swing past its
-    // limit: 15.015 V high, where no current flows. Low it sits at −15.015 V behind
-    // 37.5 Ω and sinks 30.015 V / 5137.5 Ω = 5.842 mA, which leaves it 0.219 V higher.
-    expect(netVoltage(comparing(0.1), "out")).toBeCloseTo(15.015, 3);
-    expect(netVoltage(comparing(-0.1), "out")).toBeCloseTo(-14.796, 3);
+    // The swing limiter holds a saturated output 1/10000 of the 15 V swing past its
+    // limit: 15.0015 V high, where no current flows. Low it sits at −15.0015 V behind
+    // 37.5 Ω and sinks 30.0015 V / 5137.5 Ω = 5.840 mA, which leaves it 0.219 V higher.
+    expect(netVoltage(comparing(0.1), "out")).toBeCloseTo(15.0015, 3);
+    expect(netVoltage(comparing(-0.1), "out")).toBeCloseTo(-14.7825, 3);
   });
 });
 

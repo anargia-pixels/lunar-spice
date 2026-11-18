@@ -129,6 +129,9 @@ self.addEventListener("message", (event: MessageEvent<ToWorker>) => {
     case "input":
       engine.writeInput(message.samples);
       break;
+    case "clip":
+      engine.setClip(message.elementId, message.samples, message.sampleRate);
+      break;
   }
 
   schedule();

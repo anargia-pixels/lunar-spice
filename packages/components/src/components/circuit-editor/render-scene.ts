@@ -28,6 +28,15 @@ export type Scene = {
   /** The rubber band being dragged. */
   band: Bounds | null;
   posts: readonly PostPoint[];
+  /**
+   * Loose ends flagged after a request to show them, `progress` from 0 to 1 through
+   * it; `isMoving` false for reduced motion.
+   */
+  looseEndFlash: {
+    points: readonly Point[];
+    progress: number;
+    isMoving: boolean;
+  } | null;
   /** The elements of the net under the pointer, banded underneath. */
   hoveredNet: readonly CircuitElement[];
   /**
@@ -103,6 +112,14 @@ export function renderScene(
     painter.post(point, scene.voltageAt(point), count);
   }
 
+  if (scene.looseEndFlash) {
+    const { points, progress, isMoving } = scene.looseEndFlash;
+
+    for (const point of points) {
+      painter.looseEndFlag(point, progress, isMoving);
+    }
+  }
+
   painter.netTagBoxes.clear();
 
   for (const { net, point, name, voltage } of scene.netTags) {
@@ -114,8 +131,8 @@ export function renderScene(
   // Overlays: stretch handles, ghost and rubber band
   const [selected] = scene.selection.size === 1 ? scene.selection : [];
 
-  // A part that stretches can be dragged by its ends.
-  if (selected?.isStretchable()) {
+  // A part that stretches can be dragged by its ends, and a group by its corners.
+  if (selected?.isStretchable() || selected?.isEnclosure()) {
     painter.handle(selected.start);
     painter.handle(selected.end);
   }

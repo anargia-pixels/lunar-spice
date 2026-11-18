@@ -37,6 +37,31 @@ export function restoreSnapshot({ lines, ids }: Snapshot) {
   });
 }
 
+/**
+ * `snapshot`, with each line `previous` holds for the same element swapped for that copy,
+ * so a large line, such as a microphone's sound clip, is kept once however many steps
+ * hold it.
+ */
+function sharingLines(snapshot: Snapshot, previous: Snapshot | undefined) {
+  if (!previous) {
+    return snapshot;
+  }
+
+  const previousLines = new Map(
+    previous.ids.map((id, index) => [id, previous.lines[index]]),
+  );
+
+  return {
+    ...snapshot,
+    lines: snapshot.lines.map((line, index) => {
+      const id = snapshot.ids[index];
+      const previousLine = id === undefined ? undefined : previousLines.get(id);
+
+      return previousLine === line ? previousLine : line;
+    }),
+  };
+}
+
 /** Undo and redo stacks of snapshots; reports whether each has a step. */
 export class EditorHistory {
   private undoStack: Snapshot[] = [];
@@ -57,7 +82,7 @@ export class EditorHistory {
 
   /** Records the state before an edit; a new edit drops the redo steps. */
   record(before: Snapshot) {
-    this.undoStack.push(before);
+    this.undoStack.push(sharingLines(before, this.undoStack.at(-1)));
 
     if (this.undoStack.length > MAX_HISTORY) {
       this.undoStack.shift();

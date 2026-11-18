@@ -86,6 +86,33 @@ describe("convergence", () => {
     expect(Math.abs(oscillate(1e-5) / oscillate(1e-6) - 1)).toBeLessThan(0.002);
   });
 
+  test("a comparator far faster than the steps flips over in one", () => {
+    const circuit = Circuit.parse(OSCILLATOR);
+    const capacitor = circuit.elements.find(({ kind }) => kind === "capacitor");
+    let steps = 0;
+
+    if (capacitor) {
+      const finishStep = capacitor.finishStep.bind(capacitor);
+
+      capacitor.finishStep = (system) => {
+        steps += 1;
+        finishStep(system);
+      };
+    }
+
+    const simulation = new Simulation(circuit.elements, "transient", 2.5e-5);
+
+    for (let step = 0; step < 200; step += 1) {
+      simulation.step();
+    }
+
+    // 5 ms at 4.40 kHz is 22 periods, 44 flips. The LM393 swings 7 V at 17 V/µs, about
+    // 0.47 µs with its snap, under a thirty-second of a 25 µs step: each flip takes the steps
+    // that land near its release and one more, not ten through the snap and the slew.
+    expect((steps - 200) / 44).toBeLessThan(6);
+    expect(Math.abs(oscillate(2.5e-5) / 4400 - 1)).toBeLessThan(0.03);
+  });
+
   test("divided steps leave no sliver of a step to rounding", () => {
     const circuit = Circuit.parse(OSCILLATOR);
     const capacitor = circuit.elements.find(({ kind }) => kind === "capacitor");

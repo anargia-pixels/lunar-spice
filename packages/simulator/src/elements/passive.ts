@@ -159,7 +159,7 @@ export class Potentiometer extends CircuitElement {
   /** The point on the track the wiper touches. */
   wiperContact(): Point {
     const length = Math.hypot(this.x2 - this.x1, this.y2 - this.y1) || 1;
-    const inset = Math.min(TRACK_SIZE, length) / 2 / length;
+    const inset = Math.max(length - TRACK_SIZE, 0) / 2 / length;
     const along = inset + (1 - 2 * inset) * this.position;
 
     return {
@@ -168,20 +168,43 @@ export class Potentiometer extends CircuitElement {
     };
   }
 
-  /** The track's ends, then the wiper 16 units to one side of its contact point. */
-  override posts(): Point[] {
+  /** The point 16 units to the wiper's side of `point`, where its arm runs. */
+  private besideTrack(point: Point): Point {
     const length = Math.hypot(this.x2 - this.x1, this.y2 - this.y1) || 1;
-    const contact = this.wiperContact();
     const side = 16 * this.side;
 
+    return {
+      x: point.x + ((this.y2 - this.y1) / length) * side,
+      y: point.y + ((this.x1 - this.x2) / length) * side,
+    };
+  }
+
+  /** Where the wiper's arm bends toward its contact, level with it beside the track. */
+  wiperBend(): Point {
+    return this.besideTrack(this.wiperContact());
+  }
+
+  /**
+   * The track's ends, then the wiper 16 units beside the middle of the track. As in
+   * Falstad, the wiper's post stays put wherever the wiper is, so its wire stays on it.
+   */
+  override posts(): Point[] {
     return [
       this.start,
       this.end,
-      {
-        x: contact.x + ((this.y2 - this.y1) / length) * side,
-        y: contact.y + ((this.x1 - this.x2) / length) * side,
-      },
+      this.besideTrack({
+        x: (this.x1 + this.x2) / 2,
+        y: (this.y1 + this.y2) / 2,
+      }),
     ];
+  }
+
+  override wiperPosition() {
+    return this.position;
+  }
+
+  override setWiperPosition(position: number) {
+    this.position = clampPosition(position);
   }
 
   /** Resistance from the first post to the wiper, never 0. */
@@ -321,6 +344,15 @@ export class VariableResistor extends Resistor {
 
   name() {
     return "Variable resistor";
+  }
+
+  override wiperPosition() {
+    return this.position;
+  }
+
+  override setWiperPosition(position: number) {
+    this.position = clampPosition(position);
+    this.updateResistance();
   }
 
   private updateResistance() {

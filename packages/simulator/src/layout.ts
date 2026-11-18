@@ -10,7 +10,7 @@ export type Bounds = {
 };
 
 /** Returns the box around `points`, grown by `margin` on each side. */
-function boundsOf(points: readonly Point[], margin: number): Bounds {
+export function boundsOf(points: readonly Point[], margin: number): Bounds {
   const xs = points.map(({ x }) => x);
   const ys = points.map(({ y }) => y);
 
@@ -27,9 +27,13 @@ function extentPoints(element: CircuitElement) {
   return [element.start, element.end, ...element.posts()];
 }
 
-/** Returns the box that an element's drawing roughly fills. */
+/** Returns the box that an element's drawing fills: its outline's, or else a rough one. */
 function elementBounds(element: CircuitElement): Bounds {
-  return boundsOf(extentPoints(element), element.bodyMargin());
+  const outline = element.bodyOutline();
+
+  return outline === null
+    ? boundsOf(extentPoints(element), element.bodyMargin())
+    : boundsOf([...extentPoints(element), ...outline], 0);
 }
 
 /** Returns the box around every element's drawing, or null for an empty list. */
@@ -48,7 +52,8 @@ export function boundsOfElements(elements: readonly CircuitElement[]) {
   };
 }
 
-function distanceToSegment(point: Point, a: Point, b: Point) {
+/** Returns the point of the segment from `a` to `b` nearest `point`. */
+function nearestOnSegment(point: Point, a: Point, b: Point): Point {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
   const lengthSquared = dx * dx + dy * dy;
@@ -64,14 +69,111 @@ function distanceToSegment(point: Point, a: Point, b: Point) {
           ),
         );
 
-  return Math.hypot(point.x - (a.x + along * dx), point.y - (a.y + along * dy));
+  return { x: a.x + along * dx, y: a.y + along * dy };
+}
+
+function distanceToSegment(point: Point, a: Point, b: Point) {
+  const nearest = nearestOnSegment(point, a, b);
+
+  return Math.hypot(point.x - nearest.x, point.y - nearest.y);
+}
+
+/** Returns the edges of the polygon `outline`, each as its two corners. */
+function edgesOf(outline: readonly Point[]) {
+  return outline.map(
+    (corner, index) =>
+      [corner, outline[(index + 1) % outline.length] ?? corner] as const,
+  );
+}
+
+/** True when `point` lies inside the polygon `outline`, by counting edges crossed. */
+function isInsideOutline(point: Point, outline: readonly Point[]) {
+  let isInside = false;
+
+  for (const [a, b] of edgesOf(outline)) {
+    const crosses =
+      a.y > point.y !== b.y > point.y &&
+      point.x < a.x + ((point.y - a.y) * (b.x - a.x)) / (b.y - a.y);
+
+    if (crosses) {
+      isInside = !isInside;
+    }
+  }
+
+  return isInside;
+}
+
+/** Returns the point of the polygon `outline`'s edge nearest `point`. */
+function nearestOnOutline(point: Point, outline: readonly Point[]) {
+  let nearest = outline[0] ?? point;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  for (const [a, b] of edgesOf(outline)) {
+    const candidate = nearestOnSegment(point, a, b);
+
+    const candidateDistance = Math.hypot(
+      point.x - candidate.x,
+      point.y - candidate.y,
+    );
+
+    if (candidateDistance < nearestDistance) {
+      nearest = candidate;
+      nearestDistance = candidateDistance;
+    }
+  }
+
+  return nearest;
 }
 
 /**
- * Returns how far `point` is from the element: from its line for two-post elements,
- * from its box (0 inside) for the rest.
+ * Returns how far `point` is from a part drawn as `outline` with a lead from each of
+ * its posts straight to the outline: 0 inside.
+ */
+function distanceToOutline(
+  element: CircuitElement,
+  outline: readonly Point[],
+  point: Point,
+) {
+  if (isInsideOutline(point, outline)) {
+    return 0;
+  }
+
+  const edge = nearestOnOutline(point, outline);
+  let nearest = Math.hypot(point.x - edge.x, point.y - edge.y);
+
+  for (const post of element.posts()) {
+    const lead = nearestOnOutline(post, outline);
+
+    nearest = Math.min(nearest, distanceToSegment(point, post, lead));
+  }
+
+  return nearest;
+}
+
+/** The corners of an enclosure's rectangle, clockwise from its start. */
+function enclosureCorners({ start, end }: CircuitElement) {
+  return [start, { x: end.x, y: start.y }, end, { x: start.x, y: end.y }];
+}
+
+/**
+ * Returns how far `point` is from the element: from its border for an enclosure, from
+ * its line for two-post elements, from its outline and leads for parts that give one,
+ * and from its box (0 inside) for the rest.
  */
 export function distanceToElement(element: CircuitElement, point: Point) {
+  if (element.isEnclosure()) {
+    // Inside is open canvas, for picking and rubber bands among what it holds.
+    const nearest = nearestOnOutline(point, enclosureCorners(element));
+
+    return Math.hypot(point.x - nearest.x, point.y - nearest.y);
+  }
+
+  const outline = element.bodyOutline();
+
+  if (outline !== null) {
+    return distanceToOutline(element, outline, point);
+  }
+
   if (element.posts().length <= 2) {
     return distanceToSegment(point, element.start, element.end);
   }
@@ -88,6 +190,27 @@ export function isInside(element: CircuitElement, box: Bounds) {
   return extentPoints(element).every(
     ({ x, y }) =>
       x >= box.left && x <= box.right && y >= box.top && y <= box.bottom,
+  );
+}
+
+/**
+ * Returns `elements` with everything inside each enclosure among them, such as a group's
+ * parts, in the order of `all`. What an enclosure holds is whatever lies wholly inside
+ * its rectangle.
+ */
+export function withEnclosed(
+  elements: readonly CircuitElement[],
+  all: readonly CircuitElement[],
+) {
+  const boxes = elements.flatMap((element) =>
+    element.isEnclosure() ? [boundsOf([element.start, element.end], 0)] : [],
+  );
+
+  const chosen = new Set(elements);
+
+  return all.filter(
+    (element) =>
+      chosen.has(element) || boxes.some((box) => isInside(element, box)),
   );
 }
 

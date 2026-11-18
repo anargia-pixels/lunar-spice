@@ -96,7 +96,7 @@ describe("electret microphone", () => {
       throw new Error("Expected a microphone");
     }
 
-    microphone.liveInput = () => 0.5;
+    microphone.soundInput = () => 0.5;
 
     const simulation = new Simulation(circuit.elements, "transient", 5e-6);
 
@@ -115,6 +115,22 @@ describe("electret microphone", () => {
     const circuit = Circuit.parse(micCircuit("tone"));
 
     expect(circuit.elements[2]?.dump()).toBe(line);
+  });
+
+  test("keeps its sound clip through a save", () => {
+    const line =
+      "LSMIC 0 64 0 128 0 2 1000 1 CMA-4544PF-W -44 2200 0.0005 My\\stake.wav UklGRg==";
+
+    const microphone = Circuit.parse(`$ 1 5e-6 1250 50 5 50 5e-11\n${line}`)
+      .elements[0];
+
+    if (!(microphone instanceof Microphone)) {
+      throw new Error("Expected a microphone");
+    }
+
+    expect(microphone.sound).toBe("clip");
+    expect(microphone.clip).toEqual({ name: "My take.wav", data: "UklGRg==" });
+    expect(microphone.dump()).toBe(line);
   });
 });
 

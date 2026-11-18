@@ -15,6 +15,7 @@ import {
   Voltmeter,
   Wire,
 } from "./elements/connectors";
+import { Group } from "./elements/group";
 import {
   Timer555,
   AdjustableRegulator,
@@ -161,6 +162,7 @@ const ELEMENT_CLASSES: Record<ElementKind, ElementClass> = {
   microphone: Microphone,
   speaker: Speaker,
   oscilloscope: Oscilloscope,
+  group: Group,
 };
 
 /**

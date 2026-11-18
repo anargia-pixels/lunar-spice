@@ -68,7 +68,17 @@ export type ToWorker =
     }
   /** Sent every animation frame while running; answered with a snapshot. */
   | { kind: "frame"; sound: SoundSettings }
-  | { kind: "input"; samples: Float32Array };
+  | { kind: "input"; samples: Float32Array }
+  /**
+   * A microphone's sound clip, decoded at `sampleRate`, to play on repeat; null samples
+   * forget it. Sent whenever a microphone's clip changes.
+   */
+  | {
+      kind: "clip";
+      elementId: number;
+      samples: Float32Array | null;
+      sampleRate: number;
+    };
 
 /** The data a scope collects as it runs; its controls stay with the editor. */
 export type ScopeData = {

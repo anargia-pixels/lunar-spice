@@ -122,6 +122,21 @@ const CANVAS_COMMANDS = [
     run: (editor) => editor.deleteSelection(),
   },
   {
+    id: "group",
+    label: "Group",
+    section: "Edit",
+    // Inkscape's keys for grouping and ungrouping.
+    keys: [{ key: "g", mod: true, shift: false }],
+    run: (editor) => editor.groupSelection(),
+  },
+  {
+    id: "ungroup",
+    label: "Ungroup",
+    section: "Edit",
+    keys: [{ key: "g", mod: true, shift: true }],
+    run: (editor) => editor.ungroupSelection(),
+  },
+  {
     id: "edit",
     label: "Edit properties",
     section: "Edit",

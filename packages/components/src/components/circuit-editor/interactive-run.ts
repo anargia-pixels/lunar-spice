@@ -142,6 +142,9 @@ export class InteractiveRun {
         this.emitStatus(true);
       },
       (samples) => this.send({ kind: "input", samples }, [samples.buffer]),
+      // Clips stay decoded for later rebuilds, so they are copied, not transferred.
+      (elementId, samples, sampleRate) =>
+        this.send({ kind: "clip", elementId, samples, sampleRate }),
     );
     this.worker = new Worker(new URL("./run-worker.ts", import.meta.url), {
       type: "module",

@@ -36,7 +36,7 @@ const FEATURES = [
   {
     title: "Hear your circuit",
     description:
-      "An electret microphone takes your computer's microphone as its input, and a speaker plays what reaches it.",
+      "An electret microphone listens to your computer's microphone or loops a clip you record or open, and a speaker plays what reaches it.",
   },
   {
     title: "Opens Falstad circuits",
