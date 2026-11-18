@@ -1,6 +1,6 @@
 {
   "name": "desktop",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "Lunar Spice circuit simulator",
   "productName": "Lunar Spice",
   "desktopName": "lunar-spice.desktop",
