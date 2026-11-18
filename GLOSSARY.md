@@ -37,8 +37,8 @@ A live plot of one element's voltage and current during the interactive simulati
 
 **Oscilloscope**:
 A part wired into the circuit with four channels read against its COM post, whose
-front panel (scales, trigger, measurements, cursors) shows in the results panel and
-saves with the circuit.
+front panel (scales, coupling, trigger, measurements, cursors) shows in the results
+panel and saves with the circuit.
 _Avoid_: scope, for this part
 
 **Trace**:

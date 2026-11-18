@@ -1,4 +1,5 @@
 import {
+  AC_COUPLING_CORNER,
   HORIZONTAL_DIVISIONS,
   type MeasurementKind,
   OSCILLOSCOPE_CHANNELS,
@@ -100,6 +101,9 @@ function createRing(): ChannelRing {
   };
 }
 
+/** An AC-coupled channel's series capacitor: the input it last passed and its output. */
+type Coupler = { input: number; output: number };
+
 /** Seconds across the whole screen. */
 export function screenTime(settings: OscilloscopeSettings) {
   return settings.secondsPerDivision * HORIZONTAL_DIVISIONS;
@@ -128,7 +132,8 @@ export const ROLL_SCREEN = 0.5;
  * acquires: every step goes into a ring of buckets, and a trigger, found between steps,
  * freezes a screenful around it. A frozen trace waits until a snapshot takes it before
  * the trigger arms again, so a fast signal costs one copy a frame. Each channel's meter
- * reads it over whole cycles for autoset.
+ * reads it over whole cycles for autoset. Everything past the input sees the channel
+ * after its coupling, as on a bench scope.
  */
 export class OscilloscopeRecorder {
   readonly elementId: number;
@@ -143,6 +148,12 @@ export class OscilloscopeRecorder {
   private readonly rings = Array.from(
     { length: OSCILLOSCOPE_CHANNELS },
     createRing,
+  );
+
+  /** By channel; null until an AC-coupled channel has seen its first value. */
+  private readonly couplers: (Coupler | null)[] = Array.from(
+    { length: OSCILLOSCOPE_CHANNELS },
+    () => null,
   );
 
   private pendingSteps = 0;
@@ -190,7 +201,7 @@ export class OscilloscopeRecorder {
   /**
    * Follows a new front panel or time step. A new time base or step starts the recording
    * over, since buckets then cover another number of steps; so does a channel turned on
-   * or off.
+   * or off. A new coupling starts its channel's capacitor and meter afresh.
    */
   configure(settings: OscilloscopeSettings, timeStep: number) {
     // A channel turned on would show what its ring held before it went off.
@@ -202,9 +213,22 @@ export class OscilloscopeRecorder {
           channel.isOn !== this.settings.channels[index]?.isOn,
       );
 
+    const isNewCoupling = settings.channels.map(
+      (channel, index) =>
+        channel.coupling !== this.settings.channels[index]?.coupling,
+    );
+
     const isNewTrigger =
       settings.triggerSource !== this.settings.triggerSource ||
-      settings.triggerEdge !== this.settings.triggerEdge;
+      settings.triggerEdge !== this.settings.triggerEdge ||
+      isNewCoupling[settings.triggerSource] === true;
+
+    for (const [channel, isNew] of isNewCoupling.entries()) {
+      if (isNew) {
+        this.couplers[channel] = null;
+        this.meters[channel]?.reset();
+      }
+    }
 
     this.settings = settings;
     this.timeStep = timeStep;
@@ -239,13 +263,50 @@ export class OscilloscopeRecorder {
     }
   }
 
-  /** Forgets the meters' readings along with the recording. */
+  /** Forgets the meters' readings and the coupling capacitors along with the recording. */
   restart() {
     this.clear();
+    this.couplers.fill(null);
 
     for (const meter of this.meters) {
       meter.reset();
     }
+  }
+
+  /**
+   * Channel `channel`'s `value` as its coupling passes it on. AC is a first-order
+   * high-pass at `AC_COUPLING_CORNER`, stepped by the trapezoidal rule, which keeps a
+   * signal's amplitude at a few dozen steps a cycle where backward Euler shrinks it; its
+   * capacitor starts charged to the first value it sees, so a steady input reads 0 V.
+   */
+  private couple(channel: number, value: number) {
+    const coupling = this.settings.channels[channel]?.coupling ?? "dc";
+
+    if (coupling === "dc") {
+      return value;
+    }
+
+    if (coupling === "gnd") {
+      return 0;
+    }
+
+    const coupler = this.couplers[channel];
+
+    if (!coupler) {
+      this.couplers[channel] = { input: value, output: 0 };
+
+      return 0;
+    }
+
+    const timeConstant = 1 / (2 * Math.PI * AC_COUPLING_CORNER);
+    const sum = 2 * timeConstant + this.timeStep;
+    const passed = (2 * timeConstant) / sum;
+    const kept = (2 * timeConstant - this.timeStep) / sum;
+
+    coupler.output = kept * coupler.output + passed * (value - coupler.input);
+    coupler.input = value;
+
+    return coupler.output;
   }
 
   /** Records the step that ended at `time`. */
@@ -256,8 +317,14 @@ export class OscilloscopeRecorder {
       this.origin = time - timeStep;
     }
 
+    let triggerValue = 0;
+
     for (let channel = 0; channel < OSCILLOSCOPE_CHANNELS; channel += 1) {
-      const value = oscilloscope.channelVoltage(channel);
+      const value = this.couple(channel, oscilloscope.channelVoltage(channel));
+
+      if (channel === settings.triggerSource) {
+        triggerValue = value;
+      }
 
       this.meters[channel]?.add(value, timeStep);
 
@@ -283,10 +350,7 @@ export class OscilloscopeRecorder {
       pending.squareArea += value * value * timeStep;
     }
 
-    this.watchTrigger(
-      oscilloscope.channelVoltage(settings.triggerSource),
-      time,
-    );
+    this.watchTrigger(triggerValue, time);
     this.pendingSteps += 1;
 
     if (this.pendingSteps >= this.stepsPerBucket) {
@@ -691,7 +755,8 @@ const NO_SIGNAL = 1e-6;
  * The front panel autoset picks from what each channel's meter has read: channels with
  * a signal on and scaled to fill six divisions about the middle, those without off, the
  * trigger on the middle of the first repeating one, and two and a half of its cycles on
- * the screen. Null while no channel has a signal.
+ * the screen. A GND-coupled channel, which shows no signal, stays as it is. Null while no
+ * channel has a signal.
  */
 export function autoset(
   settings: OscilloscopeSettings,
@@ -712,6 +777,10 @@ export function autoset(
   const channels = settings.channels.map((channel, index) => {
     const reading = readings[index];
 
+    if (channel.coupling === "gnd") {
+      return channel;
+    }
+
     if (!reading || !hasSignal[index]) {
       return { ...channel, isOn: false };
     }
@@ -728,6 +797,7 @@ export function autoset(
     const position = Math.round((-middle / voltsPerDivision) * 10) / 10;
 
     return {
+      ...channel,
       isOn: true,
       voltsPerDivision,
       position: Math.max(

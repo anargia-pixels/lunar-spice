@@ -10,10 +10,12 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@lunar-spice/components/ui/dropdown-menu";
+import { Input } from "@lunar-spice/components/ui/input";
 import { Slider } from "@lunar-spice/components/ui/slider";
-import { Switch } from "@lunar-spice/components/ui/switch";
 import { Toggle } from "@lunar-spice/components/ui/toggle";
 import {
+  type Coupling,
+  COUPLINGS,
   HORIZONTAL_DIVISIONS,
   MAX_MEASUREMENTS,
   OSCILLOSCOPE_CHANNELS,
@@ -29,7 +31,11 @@ import {
   VERTICAL_DIVISIONS,
   VOLTS_PER_DIVISION,
 } from "@lunar-spice/simulator/elements/oscilloscope";
-import { formatSi } from "@lunar-spice/simulator/units";
+import {
+  formatEditValue,
+  formatSi,
+  parseSi,
+} from "@lunar-spice/simulator/units";
 import { cn } from "@lunar-spice/utils/cn";
 import {
   type PointerEvent as ReactPointerEvent,
@@ -83,6 +89,18 @@ const SLIDER_STEPS_PER_DIVISION = 25;
  */
 const SCALE_WIDTH = "w-32 shrink-0 justify-between";
 
+/** Width of a channel's on/off toggle, and of the heading above the column of them. */
+const CHANNEL_WIDTH = "w-16 shrink-0 justify-start";
+
+/** Width of a DC/AC/GND control, and of the heading above the column of them. */
+const COUPLING_WIDTH = "w-28 shrink-0";
+
+/** Width of the trigger and cursor controls, right of the vertical and horizontal ones. */
+const SIDE_COLUMN = "w-56 shrink-0";
+
+/** Width of a value typed beside a slider, room for "-12.5 mV". */
+const FIELD_WIDTH = "w-20 shrink-0";
+
 /** `options` keyed by value, with `value` added when a file set one off the list. */
 function scaleOptions(
   values: readonly number[],
@@ -123,6 +141,12 @@ const EDGE_LABELS: Record<TriggerEdge, string> = {
   falling: "Falling",
 };
 
+const COUPLING_LABELS: Record<Coupling, string> = {
+  dc: "DC",
+  ac: "AC",
+  gnd: "GND",
+};
+
 const CURSOR_LABELS: Record<CursorMode, string> = {
   off: "Off",
   time: "Time",
@@ -155,6 +179,72 @@ function formatMeasurement(kind: MeasurementKind, value: number | null) {
     : formatSi(value, MEASUREMENTS[kind].unit, 4);
 }
 
+/** `value` held to `low` through `high`. */
+function clamp(value: number, low: number, high: number) {
+  return Math.min(high, Math.max(low, value));
+}
+
+/**
+ * A value beside a slider that also takes typing, for values finer than the slider's
+ * steps: `250u`, `-1.5m` or `3 mV`. It shows the value with its unit; focus turns that
+ * into the typed form, and each valid value applies as it is typed. Enter or leaving
+ * shows the applied value again; Escape puts back the value it had on focus.
+ */
+function SiInput({
+  label,
+  unit,
+  value,
+  onChange,
+}: {
+  label: string;
+  unit: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const [initial, setInitial] = useState(value);
+  const isValid = draft === null || parseSi(draft) !== null;
+
+  return (
+    <div className={FIELD_WIDTH}>
+      <Input
+        density="compact"
+        aria-label={label}
+        aria-invalid={!isValid}
+        spellCheck={false}
+        value={draft ?? formatSi(value, unit, 4)}
+        onFocus={(event) => {
+          setInitial(value);
+          setDraft(formatEditValue(value));
+          // The value changes on focus, so the selection waits for it to render.
+          const input = event.currentTarget;
+
+          requestAnimationFrame(() => input.select());
+        }}
+        onChange={(event) => {
+          const next = event.target.value;
+          const parsed = parseSi(next);
+
+          setDraft(next);
+
+          if (parsed !== null) {
+            onChange(parsed);
+          }
+        }}
+        onBlur={() => setDraft(null)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.currentTarget.blur();
+          } else if (event.key === "Escape") {
+            onChange(initial);
+            event.currentTarget.blur();
+          }
+        }}
+      />
+    </div>
+  );
+}
+
 /** The first value of a slider's change, which may come as a list. */
 function sliderValue(value: number | readonly number[]) {
   return Array.isArray(value) ? value[0] : value;
@@ -163,16 +253,17 @@ function sliderValue(value: number | readonly number[]) {
 /** A labeled group of controls. */
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section aria-label={title} className="flex shrink-0 flex-col gap-1.5">
-      <h4 className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
-        {title}
-      </h4>
+    <section aria-label={title} className="flex min-w-0 flex-col gap-1.5">
+      <h4 className="text-muted-foreground text-xs font-medium">{title}</h4>
       {children}
     </section>
   );
 }
 
-/** A row of toggles of which exactly one is pressed, one per value in `values`. */
+/**
+ * A segmented control: joined toggles on a muted track, exactly one pressed, one per
+ * value in `values`. The track's radius is the segments' plus its padding.
+ */
 function Choice<T extends string>({
   label,
   value,
@@ -187,13 +278,13 @@ function Choice<T extends string>({
   onChange: (value: T) => void;
 }) {
   return (
-    <fieldset className="flex gap-1">
+    <fieldset className="bg-muted inline-flex h-7 w-fit shrink-0 items-center gap-0.5 rounded-lg p-0.5">
       <legend className="sr-only">{label}</legend>
       {values.map((option) => (
         <Toggle
           key={option}
-          size="sm"
-          variant="outline"
+          variant="segment"
+          size="xs"
           pressed={option === value}
           onPressedChange={() => onChange(option)}
         >
@@ -204,7 +295,11 @@ function Choice<T extends string>({
   );
 }
 
-/** One channel: on or off, its volts per division and where its 0 V sits. */
+/**
+ * One channel: on or off, its volts per division, its coupling, and where its 0 V sits
+ * with that offset in volts. A channel that is off dims its controls until the pointer
+ * or focus comes to the row.
+ */
 function ChannelRow({
   index,
   channel,
@@ -217,46 +312,137 @@ function ChannelRow({
   const name = `CH${index + 1}`;
 
   return (
-    <div className="flex h-7 items-center gap-2 text-xs">
-      <Switch
+    <div className="group/channel flex h-7 items-center gap-2">
+      <Toggle
         size="sm"
-        aria-label={`${name} on`}
-        checked={channel.isOn}
-        onCheckedChange={(isOn) => onChange({ ...channel, isOn })}
-      />
-      <span className="flex w-10 shrink-0 items-center gap-1.5 font-medium">
-        <span className={cn("size-2 rounded-xs", traceSwatch(index))} />
+        variant="outline"
+        pressed={channel.isOn}
+        className={CHANNEL_WIDTH}
+        onPressedChange={(isOn) => onChange({ ...channel, isOn })}
+      >
+        <span
+          className={cn(
+            "size-2 rounded-xs transition-opacity duration-150",
+            traceSwatch(index),
+            !channel.isOn && "opacity-40",
+          )}
+        />
         {name}
-      </span>
-      <ScaleSelect
-        label={`${name} volts per division`}
-        className={SCALE_WIDTH}
-        value={String(channel.voltsPerDivision)}
-        options={scaleOptions(
-          VOLTS_PER_DIVISION,
-          channel.voltsPerDivision,
-          voltsLabel,
+      </Toggle>
+      <div
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-2 transition-opacity duration-150",
+          !channel.isOn &&
+            "opacity-50 group-focus-within/channel:opacity-100 group-hover/channel:opacity-100",
         )}
-        onChange={(value) =>
-          onChange({ ...channel, voltsPerDivision: Number(value) })
-        }
-      />
-      <Slider
-        aria-label={`${name} position`}
-        className="shrink-0 data-horizontal:w-24"
-        min={-VERTICAL_DIVISIONS / 2}
-        max={VERTICAL_DIVISIONS / 2}
-        step={1 / SLIDER_STEPS_PER_DIVISION}
-        value={channel.position}
-        onValueChange={(value) => {
-          const position = sliderValue(value);
-
-          if (position !== undefined) {
-            onChange({ ...channel, position });
+      >
+        <ScaleSelect
+          label={`${name} volts per division`}
+          className={SCALE_WIDTH}
+          value={String(channel.voltsPerDivision)}
+          options={scaleOptions(
+            VOLTS_PER_DIVISION,
+            channel.voltsPerDivision,
+            voltsLabel,
+          )}
+          onChange={(value) =>
+            onChange({ ...channel, voltsPerDivision: Number(value) })
           }
-        }}
-      />
+        />
+        <div className={COUPLING_WIDTH}>
+          <Choice
+            label={`${name} coupling`}
+            value={channel.coupling}
+            values={COUPLINGS}
+            labels={COUPLING_LABELS}
+            onChange={(coupling) => onChange({ ...channel, coupling })}
+          />
+        </div>
+        <Slider
+          aria-label={`${name} position`}
+          className="min-w-12"
+          min={-VERTICAL_DIVISIONS / 2}
+          max={VERTICAL_DIVISIONS / 2}
+          step={1 / SLIDER_STEPS_PER_DIVISION}
+          value={channel.position}
+          onValueChange={(value) => {
+            const position = sliderValue(value);
+
+            if (position !== undefined) {
+              onChange({ ...channel, position });
+            }
+          }}
+        />
+        <SiInput
+          label={`${name} offset`}
+          unit="V"
+          value={channel.position * channel.voltsPerDivision}
+          onChange={(offset) =>
+            onChange({
+              ...channel,
+              position: clamp(
+                offset / channel.voltsPerDivision,
+                -VERTICAL_DIVISIONS / 2,
+                VERTICAL_DIVISIONS / 2,
+              ),
+            })
+          }
+        />
+      </div>
     </div>
+  );
+}
+
+/**
+ * The vertical controls: a row per channel under column headings, each column as wide
+ * in every row so the controls line up down the channels.
+ */
+function VerticalControls({
+  settings,
+  onChange,
+}: {
+  settings: OscilloscopeSettings;
+  onChange: (settings: Partial<OscilloscopeSettings>) => void;
+}) {
+  return (
+    <section
+      aria-label="Vertical"
+      className="flex min-w-0 flex-1 flex-col gap-1.5"
+    >
+      <div className="text-muted-foreground flex items-center gap-2 text-xs">
+        <h4 className={cn(CHANNEL_WIDTH, "font-medium")}>Vertical</h4>
+        <span aria-hidden="true" className={SCALE_WIDTH}>
+          Scale
+        </span>
+        <span aria-hidden="true" className={COUPLING_WIDTH}>
+          Coupling
+        </span>
+        <span aria-hidden="true" className="flex-1">
+          Position
+        </span>
+        <span aria-hidden="true" className={FIELD_WIDTH}>
+          Offset
+        </span>
+      </div>
+      {CHANNELS.map((index) => {
+        const channel = settings.channels[index];
+
+        return channel ? (
+          <ChannelRow
+            key={index}
+            index={index}
+            channel={channel}
+            onChange={(next) =>
+              onChange({
+                channels: settings.channels.map((current, kept) =>
+                  kept === index ? next : current,
+                ),
+              })
+            }
+          />
+        ) : null;
+      })}
+    </section>
   );
 }
 
@@ -284,7 +470,7 @@ function HorizontalControls({
         />
         <Slider
           aria-label="Horizontal position"
-          className="min-w-16"
+          className="min-w-12"
           min={-HORIZONTAL_DIVISIONS / 2}
           max={HORIZONTAL_DIVISIONS / 2}
           step={1 / SLIDER_STEPS_PER_DIVISION}
@@ -297,11 +483,21 @@ function HorizontalControls({
             }
           }}
         />
+        <SiInput
+          label="Delay"
+          unit="s"
+          value={settings.position * settings.secondsPerDivision}
+          onChange={(delay) =>
+            onChange({
+              position: clamp(
+                delay / settings.secondsPerDivision,
+                -HORIZONTAL_DIVISIONS / 2,
+                HORIZONTAL_DIVISIONS / 2,
+              ),
+            })
+          }
+        />
       </div>
-      <p className="text-muted-foreground text-xs tabular-nums">
-        Delay{" "}
-        {formatSi(settings.position * settings.secondsPerDivision, "s", 3)}
-      </p>
     </Section>
   );
 }
@@ -351,7 +547,7 @@ function TriggerControls({
       <div className="flex h-7 items-center gap-2 text-xs">
         <Slider
           aria-label="Trigger level"
-          className="min-w-16"
+          className="min-w-12"
           min={low}
           max={high}
           step={(high - low) / (VERTICAL_DIVISIONS * SLIDER_STEPS_PER_DIVISION)}
@@ -364,12 +560,16 @@ function TriggerControls({
             }
           }}
         />
-        <output className="w-16 shrink-0 text-right tabular-nums">
+        <output
+          aria-label="Trigger level"
+          className="w-14 shrink-0 text-right text-xs tabular-nums"
+        >
           {formatSi(settings.triggerLevel, "V", 3)}
         </output>
         <Button
-          variant="ghost"
-          size="xs"
+          variant="outline"
+          size="sm"
+          aria-label="Trigger level to 50 %"
           disabled={!reading}
           onClick={() => {
             if (reading) {
@@ -832,7 +1032,13 @@ function StatusBadge({
 }
 
 /** The scale of each channel that is on, the time base and the trigger, under the screen. */
-function ScaleReadout({ settings }: { settings: OscilloscopeSettings }) {
+function ScaleReadout({
+  settings,
+  shownRef,
+}: {
+  settings: OscilloscopeSettings;
+  shownRef: RefObject<OscilloscopeTrace | null>;
+}) {
   const edge = settings.triggerEdge === "rising" ? "↑" : "↓";
 
   return (
@@ -844,6 +1050,11 @@ function ScaleReadout({ settings }: { settings: OscilloscopeSettings }) {
           <span key={index} className="flex items-center gap-1.5">
             <span className={cn("size-2 rounded-xs", traceSwatch(index))} />
             {voltsLabel(channel.voltsPerDivision)}
+            {channel.coupling !== "dc" && (
+              <span className="text-muted-foreground">
+                {COUPLING_LABELS[channel.coupling]}
+              </span>
+            )}
           </span>
         ) : null;
       })}
@@ -852,7 +1063,33 @@ function ScaleReadout({ settings }: { settings: OscilloscopeSettings }) {
         CH{settings.triggerSource + 1} {edge}{" "}
         {formatSi(settings.triggerLevel, "V", 3)}
       </span>
+      <AcquisitionReadout shownRef={shownRef} />
     </div>
+  );
+}
+
+/**
+ * How the shown trace was acquired: the sample rate, one sample per simulation step, and
+ * the record length, the samples across its screen. Dashes until there is a trace.
+ */
+function AcquisitionReadout({
+  shownRef,
+}: {
+  shownRef: RefObject<OscilloscopeTrace | null>;
+}) {
+  const trace = useShownTrace(shownRef);
+
+  const rate = trace ? formatSi(1 / trace.timeStep, "Sa/s", 3) : "– Sa/s";
+
+  const length = trace
+    ? formatSi(Math.round((trace.end - trace.start) / trace.timeStep), "pts", 3)
+    : "– pts";
+
+  return (
+    <span className="text-muted-foreground ml-auto flex gap-x-3">
+      <span aria-label="Sample rate">{rate}</span>
+      <span aria-label="Record length">{length}</span>
+    </span>
   );
 }
 
@@ -898,7 +1135,7 @@ function OscilloscopePanel({
   return (
     <section
       aria-label={entry.title}
-      className="bg-card flex h-full min-w-184 flex-1 gap-3 rounded-lg border p-2"
+      className="bg-card flex h-full min-w-268 flex-1 gap-3 rounded-lg border p-2"
     >
       <div className="flex max-w-1/2 min-w-80 flex-1 flex-col gap-1.5">
         <header className="flex items-center gap-1.5">
@@ -965,7 +1202,7 @@ function OscilloscopePanel({
           }}
           onCursorsChange={setCursors}
         />
-        <ScaleReadout settings={settings} />
+        <ScaleReadout settings={settings} shownRef={shownRef} />
         <Measurements
           settings={settings}
           shownRef={shownRef}
@@ -977,44 +1214,33 @@ function OscilloscopePanel({
           shownRef={shownRef}
         />
       </div>
-      <div className="flex w-140 shrink-0 items-start gap-4 overflow-y-auto pr-1">
-        <Section title="Vertical">
-          {CHANNELS.map((index) => {
-            const channel = settings.channels[index];
+      <div className="flex min-w-180 flex-1 flex-col gap-3 overflow-y-auto pr-1">
+        <div className="flex items-start gap-6">
+          <VerticalControls settings={settings} onChange={change} />
+          <div className={SIDE_COLUMN}>
+            <TriggerControls
+              settings={settings}
+              feed={feed}
+              onChange={(next) => {
+                change(next);
 
-            return channel ? (
-              <ChannelRow
-                key={index}
-                index={index}
-                channel={channel}
-                onChange={(next) =>
-                  change({
-                    channels: settings.channels.map((current, kept) =>
-                      kept === index ? next : current,
-                    ),
-                  })
+                if (next.triggerMode === "single") {
+                  armSingle();
+                } else if (next.triggerMode !== undefined) {
+                  setArmedCount(null);
+                  setIsStopped(false);
                 }
-              />
-            ) : null;
-          })}
-        </Section>
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <HorizontalControls settings={settings} onChange={change} />
-          <TriggerControls
-            settings={settings}
-            feed={feed}
-            onChange={(next) => {
-              change(next);
-
-              if (next.triggerMode === "single") {
-                armSingle();
-              } else if (next.triggerMode !== undefined) {
-                setArmedCount(null);
-                setIsStopped(false);
-              }
-            }}
-          />
-          <CursorControls cursors={cursors} onChange={setCursors} />
+              }}
+            />
+          </div>
+        </div>
+        <div className="flex items-start gap-6 border-t pt-3">
+          <div className="min-w-0 flex-1">
+            <HorizontalControls settings={settings} onChange={change} />
+          </div>
+          <div className={SIDE_COLUMN}>
+            <CursorControls cursors={cursors} onChange={setCursors} />
+          </div>
         </div>
       </div>
     </section>

@@ -63,10 +63,10 @@ describe("oscilloscope", () => {
 
     oscilloscope.settings = {
       channels: [
-        { isOn: true, voltsPerDivision: 0.5, position: -1.5 },
-        { isOn: false, voltsPerDivision: 2, position: 0 },
-        { isOn: true, voltsPerDivision: 0.01, position: 3 },
-        { isOn: false, voltsPerDivision: 1, position: 0 },
+        { isOn: true, coupling: "ac", voltsPerDivision: 0.5, position: -1.5 },
+        { isOn: false, coupling: "dc", voltsPerDivision: 2, position: 0 },
+        { isOn: true, coupling: "gnd", voltsPerDivision: 0.01, position: 3 },
+        { isOn: false, coupling: "dc", voltsPerDivision: 1, position: 0 },
       ],
       secondsPerDivision: 2e-5,
       position: -2.5,

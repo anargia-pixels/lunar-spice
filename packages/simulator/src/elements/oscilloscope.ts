@@ -66,8 +66,21 @@ export type MeasurementKind = (typeof MEASUREMENT_KINDS)[number];
 /** The most measurements the screen lists. */
 export const MAX_MEASUREMENTS = 8;
 
+/**
+ * How a channel's input reaches its screen: DC as it is; AC through a series capacitor
+ * that blocks its average, as a 10 Hz high-pass; GND not at all, so the trace shows where
+ * the channel's 0 V sits.
+ */
+export const COUPLINGS = ["dc", "ac", "gnd"] as const;
+
+export type Coupling = (typeof COUPLINGS)[number];
+
+/** The -3 dB corner of AC coupling, in hertz, as on a bench scope. */
+export const AC_COUPLING_CORNER = 10;
+
 export type OscilloscopeChannel = {
   isOn: boolean;
+  coupling: Coupling;
   voltsPerDivision: number;
   /** Divisions the channel's 0 V sits above the middle of the screen. */
   position: number;
@@ -90,14 +103,18 @@ export type OscilloscopeSettings = {
   measurements: readonly Measurement[];
 };
 
-/** A new oscilloscope's front panel: CH1 and CH2 on at 1 V/div, 1 ms/div. */
+/** A new oscilloscope's front panel: CH1 and CH2 on at 1 V/div DC, 1 ms/div. */
 export function defaultOscilloscopeSettings(): OscilloscopeSettings {
   return {
-    channels: Array.from({ length: OSCILLOSCOPE_CHANNELS }, (_, index) => ({
-      isOn: index < 2,
-      voltsPerDivision: 1,
-      position: 0,
-    })),
+    channels: Array.from(
+      { length: OSCILLOSCOPE_CHANNELS },
+      (_, index): OscilloscopeChannel => ({
+        isOn: index < 2,
+        coupling: "dc",
+        voltsPerDivision: 1,
+        position: 0,
+      }),
+    ),
     secondsPerDivision: 1e-3,
     position: 0,
     triggerSource: 0,
@@ -143,7 +160,7 @@ function readSettings(reader: TokenReader): OscilloscopeSettings {
   const triggerMode =
     TRIGGER_MODES[indexIn(reader.number(0), TRIGGER_MODES.length)] ?? "auto";
 
-  const channels = defaults.channels.map((channel) => ({
+  const scales = defaults.channels.map((channel) => ({
     isOn: reader.number(channel.isOn ? 1 : 0) !== 0,
     voltsPerDivision: positive(reader.number(1), 1),
     position: clamp(reader.number(0), -VERTICAL_DIVISIONS, VERTICAL_DIVISIONS),
@@ -162,6 +179,12 @@ function readSettings(reader: TokenReader): OscilloscopeSettings {
               indexIn(reader.number(0), MEASUREMENT_KINDS.length)
             ] ?? "frequency",
         }));
+
+  // Couplings follow the measurements, since they came later; a line without them is DC.
+  const channels = scales.map((channel) => ({
+    ...channel,
+    coupling: COUPLINGS[indexIn(reader.number(0), COUPLINGS.length)] ?? "dc",
+  }));
 
   return {
     channels,
@@ -194,14 +217,15 @@ function dumpSettings(settings: OscilloscopeSettings) {
       channel,
       MEASUREMENT_KINDS.indexOf(kind),
     ]),
+    ...settings.channels.map(({ coupling }) => COUPLINGS.indexOf(coupling)),
   ];
 }
 
 /**
  * A four-channel bench oscilloscope. Each channel reads its input against COM, which
  * floats like a differential probe's; tie COM to ground for ground-referenced traces.
- * It draws no current. Its front panel, the scales, trigger and measurements, is saved
- * on its line; the interactive simulation records its traces.
+ * It draws no current. Its front panel, the scales, couplings, trigger and measurements,
+ * is saved on its line; the interactive simulation records its traces.
  */
 export class Oscilloscope extends CircuitElement {
   readonly kind = "oscilloscope";

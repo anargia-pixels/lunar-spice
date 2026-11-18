@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import { Circuit, settingsForTimeStep } from "@lunar-spice/simulator/circuit";
 import {
+  AC_COUPLING_CORNER,
+  type Coupling,
   defaultOscilloscopeSettings,
   Oscilloscope,
   type OscilloscopeSettings,
@@ -38,6 +40,24 @@ function settingsWith(
     secondsPerDivision: 2e-4,
     triggerLevel: 0.5,
     ...changes,
+  };
+}
+
+/** `settingsWith(changes)` with CH1 and CH2 coupled as given. */
+function withCouplings(
+  first: Coupling,
+  second: Coupling,
+  changes: Partial<OscilloscopeSettings> = {},
+) {
+  const settings = settingsWith(changes);
+  const couplings = [first, second];
+
+  return {
+    ...settings,
+    channels: settings.channels.map((channel, index) => ({
+      ...channel,
+      coupling: couplings[index] ?? channel.coupling,
+    })),
   };
 }
 
@@ -146,6 +166,50 @@ describe("oscilloscope recorder", () => {
     expect(live?.start ?? 0).toBeCloseTo(0.008, 9);
   });
 
+  test("AC coupling blocks a channel's offset", () => {
+    const { triggered } = record(withCouplings("ac", "dc"), 0.2);
+    const readings = triggered && measureChannel(triggered, 0);
+
+    // 1 kHz is a hundred times the 10 Hz corner: the sine passes whole about 0 V.
+    expect(readings?.mean ?? 1).toBeCloseTo(0, 2);
+    expect(readings?.["peak-to-peak"] ?? 0).toBeCloseTo(2, 2);
+  });
+
+  test("AC coupling decays a step with the corner's time constant", () => {
+    // 10 µs/div puts one 1 µs step in each bucket, so the last bucket is the last step.
+    const settings = withCouplings("ac", "dc", { secondsPerDivision: 1e-5 });
+    const recorder = new OscilloscopeRecorder(1, settings, TIME_STEP);
+    const oscilloscope = new Oscilloscope(0, 0, 0, 0);
+    const timeConstant = 1 / (2 * Math.PI * AC_COUPLING_CORNER);
+    const steps = Math.round(timeConstant / TIME_STEP);
+
+    oscilloscope.volts = [0, 0, 0, 0, 0];
+    recorder.record(oscilloscope, TIME_STEP);
+    oscilloscope.volts = [1, 0, 0, 0, 0];
+
+    for (let step = 1; step <= steps; step += 1) {
+      recorder.record(oscilloscope, (step + 1) * TIME_STEP);
+    }
+
+    const live = recorder.live();
+    const last = live?.channels[0]?.extremes.at(-1);
+
+    // A 1 V step through a high-pass reads e^(−t/τ): 1/e one time constant on.
+    expect(last ?? 0).toBeCloseTo(Math.exp(-1), 3);
+  });
+
+  test("GND coupling shows a flat 0 V that autoset leaves alone", () => {
+    const settings = withCouplings("dc", "gnd");
+    const { recorder, triggered } = record(settings, 0.01);
+    const readings = triggered && measureChannel(triggered, 1);
+
+    expect(readings?.maximum).toBe(0);
+    expect(readings?.minimum).toBe(0);
+    expect(autoset(settings, recorder.meters)?.channels[1]).toEqual(
+      settings.channels[1],
+    );
+  });
+
   test("autoset scales the channels and triggers on the first repeating one", () => {
     const { recorder } = record(settingsWith({ secondsPerDivision: 1 }), 0.05);
     const settings = autoset(settingsWith(), recorder.meters);
@@ -153,10 +217,10 @@ describe("oscilloscope recorder", () => {
     // 2 V peak-to-peak over six divisions needs 0.5 V/div; its middle, 0.5 V, one
     // division down. 5 V needs 1 V/div, its middle 2.5 divisions down.
     expect(settings?.channels).toEqual([
-      { isOn: true, voltsPerDivision: 0.5, position: -1 },
-      { isOn: true, voltsPerDivision: 1, position: -2.5 },
-      { isOn: false, voltsPerDivision: 1, position: 0 },
-      { isOn: false, voltsPerDivision: 1, position: 0 },
+      { isOn: true, coupling: "dc", voltsPerDivision: 0.5, position: -1 },
+      { isOn: true, coupling: "dc", voltsPerDivision: 1, position: -2.5 },
+      { isOn: false, coupling: "dc", voltsPerDivision: 1, position: 0 },
+      { isOn: false, coupling: "dc", voltsPerDivision: 1, position: 0 },
     ]);
     expect(settings?.triggerSource).toBe(0);
     expect(settings?.triggerLevel ?? 0).toBeCloseTo(0.5, 3);

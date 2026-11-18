@@ -11,12 +11,17 @@ const toggleVariants = cva(
         outline: "border-input hover:bg-muted border bg-transparent",
         // No hover fill of its own, for groups that share a FluidHighlight.
         fluid: "relative bg-transparent hover:bg-transparent",
+        // One segment of a segmented control on a muted track: the pressed one is raised.
+        segment:
+          "text-muted-foreground hover:text-foreground aria-pressed:bg-card aria-pressed:text-foreground dark:aria-pressed:bg-accent bg-transparent hover:bg-transparent aria-pressed:shadow-xs",
       },
       size: {
         default:
           "h-8 min-w-8 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
         sm: "h-7 min-w-7 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
         lg: "h-9 min-w-9 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
+        // Fits a h-7 segmented track with p-0.5: its radius plus the padding is the track's.
+        xs: "h-6 min-w-6 rounded-md px-2 text-xs",
         "icon-sm": "size-7 rounded-[min(var(--radius-md),12px)]",
       },
     },
