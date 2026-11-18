@@ -6,16 +6,21 @@ import {
   SelectValue,
 } from "@lunar-spice/components/ui/select";
 
-/** A compact dropdown of scales, such as a scope's time span, keyed by value. */
+/**
+ * A compact dropdown of scales, such as a scope's time span, keyed by value. A
+ * `className` such as a fixed width keeps it from resizing as the scale changes.
+ */
 export function ScaleSelect({
   label,
   value,
   options,
+  className,
   onChange,
 }: {
   label: string;
   value: string;
   options: Record<string, string>;
+  className?: string;
   onChange: (value: string) => void;
 }) {
   return (
@@ -30,7 +35,7 @@ export function ScaleSelect({
         }
       }}
     >
-      <SelectTrigger size="sm" aria-label={label}>
+      <SelectTrigger size="sm" aria-label={label} className={className}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent alignItemWithTrigger={false}>

@@ -77,6 +77,12 @@ const POLL_MS = 200;
 /** Steps across a position or level slider per division. */
 const SLIDER_STEPS_PER_DIVISION = 25;
 
+/**
+ * Width of a volts or seconds per division dropdown: room for its widest scale, such as
+ * "500 mV/div", so the sliders beside them line up and stay put as scales change.
+ */
+const SCALE_WIDTH = "w-32 shrink-0 justify-between";
+
 /** `options` keyed by value, with `value` added when a file set one off the list. */
 function scaleOptions(
   values: readonly number[],
@@ -157,7 +163,7 @@ function sliderValue(value: number | readonly number[]) {
 /** A labeled group of controls. */
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section aria-label={title} className="flex flex-col gap-1.5">
+    <section aria-label={title} className="flex shrink-0 flex-col gap-1.5">
       <h4 className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
         {title}
       </h4>
@@ -224,6 +230,7 @@ function ChannelRow({
       </span>
       <ScaleSelect
         label={`${name} volts per division`}
+        className={SCALE_WIDTH}
         value={String(channel.voltsPerDivision)}
         options={scaleOptions(
           VOLTS_PER_DIVISION,
@@ -236,7 +243,7 @@ function ChannelRow({
       />
       <Slider
         aria-label={`${name} position`}
-        className="min-w-16"
+        className="shrink-0 data-horizontal:w-24"
         min={-VERTICAL_DIVISIONS / 2}
         max={VERTICAL_DIVISIONS / 2}
         step={1 / SLIDER_STEPS_PER_DIVISION}
@@ -266,6 +273,7 @@ function HorizontalControls({
       <div className="flex h-7 items-center gap-2 text-xs">
         <ScaleSelect
           label="Seconds per division"
+          className={SCALE_WIDTH}
           value={String(settings.secondsPerDivision)}
           options={scaleOptions(
             SECONDS_PER_DIVISION,
@@ -892,7 +900,7 @@ function OscilloscopePanel({
       aria-label={entry.title}
       className="bg-card flex h-full min-w-184 flex-1 gap-3 rounded-lg border p-2"
     >
-      <div className="flex min-w-80 flex-1 flex-col gap-1.5">
+      <div className="flex max-w-1/2 min-w-80 flex-1 flex-col gap-1.5">
         <header className="flex items-center gap-1.5">
           <h3 className="min-w-0 truncate text-xs font-medium">
             {entry.title}
@@ -969,7 +977,7 @@ function OscilloscopePanel({
           shownRef={shownRef}
         />
       </div>
-      <div className="grid w-120 shrink-0 auto-rows-min grid-cols-2 gap-x-4 gap-y-3 overflow-y-auto pr-1">
+      <div className="flex w-140 shrink-0 items-start gap-4 overflow-y-auto pr-1">
         <Section title="Vertical">
           {CHANNELS.map((index) => {
             const channel = settings.channels[index];
@@ -990,7 +998,7 @@ function OscilloscopePanel({
             ) : null;
           })}
         </Section>
-        <div className="flex flex-col gap-3">
+        <div className="flex min-w-0 flex-1 flex-col gap-3">
           <HorizontalControls settings={settings} onChange={change} />
           <TriggerControls
             settings={settings}
