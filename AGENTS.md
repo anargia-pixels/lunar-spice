@@ -19,7 +19,9 @@ in code, UI copy, docs or conversation, use the terms in [GLOSSARY.md](GLOSSARY.
   panels, settings panes and the zustand stores. Analyses run in `lib/analysis-worker.ts`,
   off the UI thread. Each app supplies storage, file opening, its About rows and its
   Storage pane through `Platform` in `lib/platform.ts`. Saved circuits are named by
-  `freeName` in `lib/circuit-files.ts` on every platform.
+  `freeName` in `lib/circuit-files.ts` on every platform. Agent tools are declared once in
+  `lib/agent-tools.ts`, against a `CircuitHost`; `lib/web-mcp.ts` registers them with
+  WebMCP and as `window.lunarSpice`.
 - `packages/simulator`: the engine, pure TypeScript with no DOM or React. Modified nodal
   analysis (`mna-system.ts`, `simulation.ts`), elements in `elements/`, the four analyses
   in `analyses.ts`, the circuit file format in `circuit.ts`, examples in `examples.ts`.

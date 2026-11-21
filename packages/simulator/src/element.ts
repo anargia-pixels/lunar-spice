@@ -21,6 +21,8 @@ export type ElementKind =
   | "spdt-switch"
   | "diode"
   | "led"
+  | "optocoupler"
+  | "vactrol"
   | "bjt"
   | "mosfet"
   | "jfet"

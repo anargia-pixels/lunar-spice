@@ -414,6 +414,17 @@ export class AcSystem {
     return this.nodeCount + branch;
   }
 
+  /** Adds `value` to one real matrix entry; rows and columns of ground are dropped. */
+  stampReal(row: number, column: number, value: number) {
+    if (row <= 0 || column <= 0) {
+      return;
+    }
+
+    const index = (row - 1) * this.size + (column - 1);
+
+    this.real[index] = (this.real[index] ?? 0) + value;
+  }
+
   /** Adds `value` to one imaginary matrix entry; rows and columns of ground are dropped. */
   stampImaginary(row: number, column: number, value: number) {
     if (row <= 0 || column <= 0) {

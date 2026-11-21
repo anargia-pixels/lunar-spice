@@ -22,6 +22,7 @@ import {
   FixedRegulator,
 } from "./elements/integrated-circuits";
 import { OpAmp } from "./elements/op-amp";
+import { Optocoupler, Vactrol } from "./elements/optocouplers";
 import { Oscilloscope } from "./elements/oscilloscope";
 import {
   Capacitor,
@@ -151,6 +152,8 @@ const ELEMENT_CLASSES: Record<ElementKind, ElementClass> = {
   "spdt-switch": SpdtSwitch,
   diode: Diode,
   led: Led,
+  optocoupler: Optocoupler,
+  vactrol: Vactrol,
   bjt: Bjt,
   mosfet: Mosfet,
   jfet: Jfet,

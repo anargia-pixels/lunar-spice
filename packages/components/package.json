@@ -12,6 +12,7 @@
     "./circuit-editor/editor-controller": "./src/components/circuit-editor/editor-controller.ts",
     "./circuit-editor/simulation-status": "./src/components/circuit-editor/simulation-status.ts",
     "./circuit-editor/display-options": "./src/components/circuit-editor/display-options.ts",
+    "./circuit-editor/tools": "./src/components/circuit-editor/tools.ts",
     "./*": "./src/components/*.tsx"
   },
   "scripts": {

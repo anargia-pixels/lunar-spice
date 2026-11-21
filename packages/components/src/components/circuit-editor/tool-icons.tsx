@@ -84,6 +84,24 @@ const GLYPHS: Record<ToolId | "more", ReactNode> = {
       <path d="m16 3-2.5.7 1.8 1.8ZM21 4l-2.5.7 1.8 1.8Z" fill="currentColor" />
     </>
   ),
+  optocoupler: (
+    <>
+      <path d="M6 2v6M6 13v9M3 13h6M15 8v8M15 10.5l4-3V2M15 13.5l4 3V22M10 9.5h2.5M10 13h2.5" />
+      <path
+        d="M3 8h6l-3 5ZM14 9.5l-1.6-1.1v2.2ZM14 13l-1.6-1.1v2.2ZM19 16.5l-2.7-.1 1.2-1.9Z"
+        fill="currentColor"
+      />
+    </>
+  ),
+  vactrol: (
+    <>
+      <path d="M6 2v6M6 13v9M3 13h6M18 2v4l-2.5 1.5 5 2-5 2 5 2-5 2 2.5 1.5v5M10 9.5h2.5M10 13h2.5" />
+      <path
+        d="M3 8h6l-3 5ZM14 9.5l-1.6-1.1v2.2ZM14 13l-1.6-1.1v2.2Z"
+        fill="currentColor"
+      />
+    </>
+  ),
   npn: (
     <>
       <path d="M2 12h7M9 6v12M9 10l7-4V2M9 14l7 4v4" />

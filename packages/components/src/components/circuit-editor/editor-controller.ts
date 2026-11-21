@@ -1198,6 +1198,36 @@ export class EditorController {
     return true;
   }
 
+  /**
+   * Applies `edit` to the circuit as one undo step: an edit made in code rather than by
+   * hand, such as an agent's. Elements it leaves in place keep their identity for scopes;
+   * removed ones leave the selection. Settings it changes stay out of the history, as
+   * the sliders' do.
+   */
+  editCircuit(edit: (circuit: Circuit) => void) {
+    // Recorded once `edit` succeeds, so one that throws before changing anything leaves
+    // no empty undo step.
+    const snapshot = snapshotOf(this.circuit.elements);
+
+    edit(this.circuit);
+    this.history.record(snapshot);
+
+    const kept = new Set(this.circuit.elements);
+
+    this.selection = new Set(
+      [...this.selection].filter((element) => kept.has(element)),
+    );
+
+    if (this.hovered && !kept.has(this.hovered)) {
+      this.hovered = null;
+    }
+
+    this.drag = null;
+    this.wiring = null;
+    this.run.updateSettings();
+    this.commit();
+  }
+
   /** Swaps an element for an edited copy, keeping its identity for scopes. */
   replaceElement(original: CircuitElement, replacement: CircuitElement) {
     const index = this.circuit.elements.indexOf(original);

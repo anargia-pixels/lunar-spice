@@ -15,19 +15,22 @@ run the analyses you would reach for in Multisim:
 
 A small set of components, each configurable from its datasheet: pick a real part (1N4148,
 1N4007, 2N3904, BC547B, 2N7000, IRF540N, 2N3819, LM741, TL072, LM393, 7805, 7912, LM317,
-LM337, NE555, …), paste a vendor SPICE `.model` card, or type the values yourself.
+LM337, NE555, PC817, 4N35, VTL5C3, …), paste a vendor SPICE `.model` card, or type the
+values yourself.
 
 Resistor · capacitor (ESR) · inductor (DCR) · DC and AC sources (internal resistance) ·
 rail · current source · switch, push switch (normally open or closed) and changeover
-switch · diode and Zener · LED · NPN/PNP · N/P-channel MOSFET · N/P-channel JFET · op-amp
-(gain, GBW, slew rate, Rin, Rout, offset, swing; VCC and VEE pins, with its output
-swinging to each supply less the datasheet's drop) · Schmitt trigger, buffer or inverter
-(thresholds, output levels, output resistance, slew rate) · fixed regulator (7805-style) ·
-adjustable regulator (LM317-style) · 555 timer · electret microphone (live from your
-microphone, a test tone, or a clip you record or open, played on repeat) · speaker (plays
-through your speakers) · voltmeter · voltage probe (to ground, with V(p-p), V(rms), V(dc)
-and frequency, as in Multisim) · oscilloscope (four channels against COM) · net label ·
-ground.
+switch · diode and Zener · LED · optocoupler (LED and phototransistor: CTR, VCE(sat), rise
+time) · vactrol (LED and photoresistor: the datasheet's resistance at 1, 10 and 40 mA,
+dark resistance, fast turn-on and slow turn-off) · NPN/PNP · N/P-channel MOSFET ·
+N/P-channel JFET · op-amp (gain, GBW, slew rate, Rin, Rout, offset, swing; VCC and VEE
+pins, with its output swinging to each supply less the datasheet's drop) · Schmitt
+trigger, buffer or inverter (thresholds, output levels, output resistance, slew rate) ·
+fixed regulator (7805-style) · adjustable regulator (LM317-style) · 555 timer · electret
+microphone (live from your microphone, a test tone, or a clip you record or open, played
+on repeat) · speaker (plays through your speakers) · voltmeter · voltage probe (to ground,
+with V(p-p), V(rms), V(dc) and frequency, as in Multisim) · oscilloscope (four channels
+against COM) · net label · ground.
 
 Parts have a fixed size, as in Multisim: a click places one, and `[` `]`, H and V turn or
 mirror it before you click. Only wires stretch. A voltage probe rests on any wire or post
@@ -63,6 +66,18 @@ Ctrl+G draws a titled outline around the selection, like an Excalidraw frame: dr
 its border or title and whatever lies inside moves, copies and deletes with it. Drag its
 corners to resize it, double-click it to rename it, and Ctrl+Shift+G removes the outline
 and keeps the parts. Falstad's boxes open as groups.
+
+## Agents
+
+The app offers tools to AI agents through
+[WebMCP](https://github.com/webmachinelearning/webmcp), so an agent in the browser can
+build and test circuits in the open editor: list the parts, read the circuit with the pins
+on every net, place parts, wire or label pins together, change values, delete parts, write
+the circuit file, run an analysis and run the interactive simulation. Each edit is one
+undo step, and analyses show in the results panel. WebMCP is behind
+`chrome://flags/#enable-webmcp-testing` in Chrome; `agent-browser` turns it on by itself
+(`agent-browser webmcp list`). Scripts that drive the page without WebMCP can call the
+same tools as `window.lunarSpice.callTool(name, input)`.
 
 ## Files
 

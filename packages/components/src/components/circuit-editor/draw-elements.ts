@@ -17,6 +17,11 @@ import {
 } from "@lunar-spice/simulator/elements/integrated-circuits";
 import { OpAmp } from "@lunar-spice/simulator/elements/op-amp";
 import {
+  COUPLER_SIZE,
+  Optocoupler,
+  Vactrol,
+} from "@lunar-spice/simulator/elements/optocouplers";
+import {
   OSCILLOSCOPE_PINS,
   OSCILLOSCOPE_SIZE,
 } from "@lunar-spice/simulator/elements/oscilloscope";
@@ -192,6 +197,8 @@ export class SchematicPainter {
     speaker: (element) => this.drawSpeaker(element),
     diode: (element) => this.drawDiode(element),
     led: (element) => this.drawDiode(element),
+    optocoupler: (element) => this.drawCoupler(element),
+    vactrol: (element) => this.drawCoupler(element),
     bjt: (element) => this.drawBjt(element),
     mosfet: (element) => this.drawMosfet(element),
     jfet: (element) => this.drawJfet(element),
@@ -1524,6 +1531,105 @@ export class SchematicPainter {
           9,
         ),
       );
+    }
+  }
+
+  /**
+   * An optocoupler or vactrol: a box with the LED down its left side shining on the
+   * output down its right, a phototransistor or a photoresistor cell, and its name above.
+   */
+  private drawCoupler(element: CircuitElement) {
+    if (!(element instanceof Optocoupler || element instanceof Vactrol)) {
+      return;
+    }
+
+    const { context } = this;
+    const x = element.x1;
+    const y = element.y1;
+    const { width, height } = COUPLER_SIZE;
+    const at = (dx: number, dy: number) => ({ x: x + dx, y: y + dy });
+    const [va = 0, vk = 0, vc = 0, ve = 0] = element.volts;
+    const names = element.pinNames();
+
+    context.strokeStyle = this.outlineColor();
+    context.beginPath();
+    context.roundRect(x, y, width, height, 3);
+    context.stroke();
+
+    // The leads from each post to the box, named inside it.
+    element.posts().forEach((post, index) => {
+      const isLeft = post.x < x;
+      const edge = { x: isLeft ? x : x + width, y: post.y };
+      const name = names[index] ?? "";
+
+      this.line(post, edge, this.voltageColor(element.volts[index] ?? 0));
+      this.dots([post, edge], index);
+
+      if (name) {
+        this.text(
+          name,
+          { x: edge.x + (isLeft ? 4 : -4), y: post.y - 6 },
+          isLeft ? "left" : "right",
+          7,
+        );
+      }
+    });
+
+    // The LED, pointing down from A to K, glowing on a vactrol, whose LED is visible.
+    if (element instanceof Vactrol) {
+      const glow = Math.min(1, Math.max(0, element.current / 0.02));
+
+      if (glow > 0.02) {
+        const center = at(16, 30);
+
+        context.fillStyle = rgbText([255, 0, 0], 0.15 + glow * 0.6);
+        context.beginPath();
+        context.arc(center.x, center.y, 10, 0, 2 * Math.PI);
+        context.fill();
+      }
+    }
+
+    this.shadedPath([at(0, 16), at(16, 16), at(16, 24)], va, va);
+    this.shadedPath([at(16, 36), at(16, 48), at(0, 48)], vk, vk);
+    context.fillStyle = this.voltageColor((va + vk) / 2);
+    context.beginPath();
+    context.moveTo(x + 9, y + 24);
+    context.lineTo(x + 23, y + 24);
+    context.lineTo(x + 16, y + 36);
+    context.closePath();
+    context.fill();
+    this.line(at(9, 36), at(23, 36), this.voltageColor(vk));
+
+    // The light crossing the gap.
+    for (const dy of [26, 34]) {
+      this.line(at(27, dy), at(35, dy), this.outlineColor());
+      this.arrowHead(at(36, dy), at(27, dy), this.outlineColor());
+    }
+
+    if (element instanceof Optocoupler) {
+      // A phototransistor with no base lead: the light is its base.
+      this.line(at(42, 22), at(42, 42), this.outlineColor());
+      this.shadedPath([at(42, 28), at(52, 22), at(52, 16), at(64, 16)], vc, vc);
+      this.shadedPath([at(42, 36), at(52, 42), at(52, 48), at(64, 48)], ve, ve);
+      this.arrowHead(at(51, 41.4), at(42, 36), this.voltageColor(ve));
+    } else {
+      // A photoresistor cell: a resistor down the right side.
+      const zigzag = [at(64, 16), at(52, 16), at(52, 20)];
+
+      for (let index = 0; index < 6; index += 1) {
+        zigzag.push(at(index % 2 === 0 ? 47 : 57, 23 + index * 4));
+      }
+
+      zigzag.push(at(52, 44), at(52, 48), at(64, 48));
+      this.shadedPath(zigzag, vc, ve);
+    }
+
+    if (this.options.showValues) {
+      const lines = labelLines(element);
+
+      if (lines.length > 0) {
+        this.partLabel(element, lines.join("  "), at(width / 2, -8));
+      }
     }
   }
 

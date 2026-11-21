@@ -228,6 +228,14 @@ export class Diode extends CircuitElement {
   readonly params: ParamSet;
   readonly junction = new CompanionCapacitor(0);
   junctionCurrent = 0;
+  /**
+   * The junction as the latest iteration linearized it: its voltage, its current there
+   * and the current's slope, for parts that follow the diode's current, as an
+   * optocoupler's phototransistor does.
+   */
+  linearVoltage = 0;
+  linearCurrent = 0;
+  linearConductance = 0;
   private lastVoltage = 0;
 
   constructor(x1: number, y1: number, x2: number, y2: number, flags = 0) {
@@ -297,7 +305,7 @@ export class Diode extends CircuitElement {
   }
 
   /** Returns the index in `nodes` of the junction's anode side: past RS, if any. */
-  private junctionIndex() {
+  junctionIndex() {
     return this.params.get("rs") > 0 ? 2 : 0;
   }
 
@@ -385,6 +393,9 @@ export class Diode extends CircuitElement {
     // Stamp the junction linearized at `voltage`: a conductance and a current source.
     const { current, conductance } = this.junctionModel(voltage);
 
+    this.linearVoltage = voltage;
+    this.linearCurrent = current;
+    this.linearConductance = conductance;
     system.stampConductance(anode, cathode, conductance);
     system.stampCurrentSource(anode, cathode, current - conductance * voltage);
     this.junction.stampStep(system);
@@ -411,6 +422,9 @@ export class Diode extends CircuitElement {
   override reset() {
     super.reset();
     this.lastVoltage = 0;
+    this.linearVoltage = 0;
+    this.linearCurrent = 0;
+    this.linearConductance = 0;
     this.junction.reset();
   }
 

@@ -45,16 +45,28 @@ type SimulationStore = {
   setScopes: (scopes: readonly Scope[]) => void;
   setOscilloscopes: (oscilloscopes: readonly OscilloscopeEntry[]) => void;
   setResultsTab: (tab: ResultsTab) => void;
-  runAnalysis: (circuitId: string, text: string) => void;
+  /** Resolves with the result, or why there is none, as when a later run replaced it. */
+  runAnalysis: (circuitId: string, text: string) => Promise<AnalysisResponse>;
   cancelAnalysis: () => void;
 };
 
 /** The worker running the current analysis, so a new run or Cancel can stop it. */
 let worker: Worker | null = null;
 
-function stopWorker() {
+/** Settles the promise of the run `worker` is on. */
+let settle: ((response: AnalysisResponse) => void) | null = null;
+
+/** Stops the current run; its promise settles with `response`. */
+function stopWorker(
+  response: AnalysisResponse = {
+    isOk: false,
+    error: "The analysis was cancelled.",
+  },
+) {
   worker?.terminate();
   worker = null;
+  settle?.(response);
+  settle = null;
 }
 
 /** Analysis settings, remembered across launches, plus the latest results. */
@@ -147,13 +159,17 @@ export const useSimulationStore = create<SimulationStore>()(
         worker = current;
         set({ isAnalyzing: true, analysisError: null, resultsTab: "analysis" });
         useLayoutStore.getState().setResultsOpen(true);
+
+        const settled = new Promise<AnalysisResponse>((resolve) => {
+          settle = resolve;
+        });
+
         current.addEventListener(
           "message",
           (event: MessageEvent<AnalysisResponse>) => {
-            stopWorker();
-
             const response = event.data;
 
+            stopWorker(response);
             set(
               response.isOk
                 ? {
@@ -167,14 +183,14 @@ export const useSimulationStore = create<SimulationStore>()(
           },
         );
         current.addEventListener("error", (event) => {
-          stopWorker();
-          set({
-            isAnalyzing: false,
-            analysisError:
-              event.message || "The analysis stopped unexpectedly.",
-          });
+          const error = event.message || "The analysis stopped unexpectedly.";
+
+          stopWorker({ isOk: false, error });
+          set({ isAnalyzing: false, analysisError: error });
         });
         current.postMessage(request);
+
+        return settled;
       },
       cancelAnalysis: () => {
         stopWorker();

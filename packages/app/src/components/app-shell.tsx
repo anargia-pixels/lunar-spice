@@ -3,6 +3,7 @@ import { TooltipProvider } from "@lunar-spice/components/ui/tooltip";
 import { useEffect } from "react";
 
 import { openCircuit } from "../lib/open-circuit-file";
+import { startAgentTools } from "../lib/web-mcp";
 import { startCircuitSync } from "../stores/circuit-store";
 import { AppMenuBar } from "./app-menu-bar";
 import { EditorPage } from "./editor-page";
@@ -16,6 +17,7 @@ import { useAppShortcuts } from "./use-app-shortcuts";
 export function AppShell() {
   useAppShortcuts();
   useEffect(() => startCircuitSync(openCircuit), []);
+  useEffect(() => startAgentTools(), []);
 
   // Tooltips open after 800 ms of hover, or at once within 300 ms of one closing.
   return (
