@@ -492,7 +492,7 @@ export class SchematicPainter {
     const { context } = this;
 
     context.lineWidth = GROUP_LINE_WIDTH;
-    context.strokeStyle = this.look.accent ?? rgbText(this.palette.muted);
+    context.strokeStyle = this.look.accent ?? this.palette.mutedSurface;
     context.beginPath();
     context.roundRect(
       left,
