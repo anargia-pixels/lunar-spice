@@ -82,6 +82,9 @@ const LABEL_SIZE = 11;
 /** Width of a group's outline, thinner than a wire so it never reads as one. */
 const GROUP_LINE_WIDTH = 1;
 
+/** Dots along a group's outline: each dot's length, then the gap after it. */
+const GROUP_DASH = [1, 4];
+
 /** Corner radius of a group's outline. */
 const GROUP_RADIUS = 6;
 
@@ -482,8 +485,8 @@ export class SchematicPainter {
   }
 
   /**
-   * A thin rounded outline from corner to corner, as Excalidraw draws a frame, with the
-   * title above its top-left corner.
+   * A thin dotted rounded outline from corner to corner, as Excalidraw draws a frame, with
+   * the title above its top-left corner.
    */
   private drawGroup(element: CircuitElement) {
     const { start, end } = element;
@@ -491,8 +494,10 @@ export class SchematicPainter {
     const top = Math.min(start.y, end.y);
     const { context } = this;
 
+    context.save();
     context.lineWidth = GROUP_LINE_WIDTH;
-    context.strokeStyle = this.look.accent ?? this.palette.mutedSurface;
+    context.setLineDash(GROUP_DASH);
+    context.strokeStyle = this.look.accent ?? rgbText(this.palette.muted);
     context.beginPath();
     context.roundRect(
       left,
@@ -502,6 +507,7 @@ export class SchematicPainter {
       GROUP_RADIUS,
     );
     context.stroke();
+    context.restore();
 
     if (element instanceof Group) {
       this.partLabel(

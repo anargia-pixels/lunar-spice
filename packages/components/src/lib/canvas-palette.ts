@@ -7,10 +7,7 @@ type Rgb = readonly [number, number, number];
 export type CanvasPalette = {
   background: string;
   foreground: Rgb;
-  /** The theme's `--muted-foreground`. */
   muted: Rgb;
-  /** The theme's `--muted`, dimmer than `muted`; group outlines use it. */
-  mutedSurface: string;
   primary: string;
   /** Marks the parts behind a simulation error. */
   destructive: string;
@@ -80,7 +77,6 @@ function readCanvasPalette(): CanvasPalette {
     background: solid("background"),
     foreground: toRgb(token("foreground")),
     muted: toRgb(token("muted-foreground")),
-    mutedSurface: solid("muted"),
     primary: solid("primary"),
     destructive: solid("destructive"),
     border: solid("border"),
