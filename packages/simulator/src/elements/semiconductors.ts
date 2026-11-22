@@ -237,6 +237,30 @@ export class Diode extends CircuitElement {
   linearCurrent = 0;
   linearConductance = 0;
   private lastVoltage = 0;
+  /** The slope of the current `junctionModel` last returned. */
+  private modelConductance = 0;
+  /**
+   * The parameters each iteration reads, as `stamp` last read them: they hold for a whole
+   * simulation, and looking them up every iteration costs more than the model itself.
+   */
+  private model = {
+    /** The index in `nodes` of the junction's anode side. */
+    junction: 0,
+    saturation: 0,
+    thermal: THERMAL_VOLTAGE,
+    /** Critical voltages of the forward and breakdown exponentials, for `limitJunction`. */
+    critical: 0,
+    breakdown: 0,
+    breakdownCurrent: 0,
+    breakdownCritical: 0,
+  };
+  /** Where the junction stamps: the rows of its two sides, and in them each side. */
+  private anodeRow: Handle = 0;
+  private cathodeRow: Handle = 0;
+  private anodeFromAnode: Handle = 0;
+  private anodeFromCathode: Handle = 0;
+  private cathodeFromAnode: Handle = 0;
+  private cathodeFromCathode: Handle = 0;
 
   constructor(x1: number, y1: number, x2: number, y2: number, flags = 0) {
     super(x1, y1, x2, y2, flags);
@@ -309,45 +333,66 @@ export class Diode extends CircuitElement {
     return this.params.get("rs") > 0 ? 2 : 0;
   }
 
-  /** Returns the thermal voltage times the emission coefficient N. */
-  private thermal() {
-    return this.params.get("n") * THERMAL_VOLTAGE;
-  }
-
-  /** Returns the junction current and conductance at `voltage`, breakdown included. */
+  /** Returns the junction current at `voltage`, and its slope into `modelConductance`. */
   private junctionModel(voltage: number) {
-    const saturation = this.params.get("is");
-    const thermal = this.thermal();
+    const { saturation, thermal, breakdown, breakdownCurrent } = this.model;
     const exponential = limitedExp(voltage / thermal);
     let current = saturation * (exponential - 1) + JUNCTION_GMIN * voltage;
     let conductance = (saturation * exponential) / thermal + JUNCTION_GMIN;
-    const breakdown = this.params.get("bv");
 
     if (breakdown > 0) {
       const reverse =
-        this.params.get("ibv") * limitedExp(-(voltage + breakdown) / thermal);
+        breakdownCurrent * limitedExp(-(voltage + breakdown) / thermal);
 
       current -= reverse;
       conductance += reverse / thermal;
     }
 
-    return { current, conductance };
+    this.modelConductance = conductance;
+
+    return current;
   }
 
   override isNonlinear() {
     return true;
   }
 
+  /** The test predicts the junction current, as SPICE's does. */
+  override hasExactConvergenceTest() {
+    return true;
+  }
+
   override stamp(system: MnaSystem) {
     const rs = this.params.get("rs");
+    const saturation = this.params.get("is");
+    const thermal = this.params.get("n") * THERMAL_VOLTAGE;
+    const breakdownCurrent = this.params.get("ibv");
+    const junction = this.junctionIndex();
+    const anode = this.node(junction);
+    const cathode = this.node(1);
 
+    this.model = {
+      junction,
+      saturation,
+      thermal,
+      critical: criticalVoltage(saturation, thermal),
+      breakdown: this.params.get("bv"),
+      breakdownCurrent,
+      breakdownCritical: criticalVoltage(breakdownCurrent, thermal),
+    };
+    this.anodeRow = system.rightSideRow(anode);
+    this.cathodeRow = system.rightSideRow(cathode);
+    this.anodeFromAnode = system.variableEntry(anode, anode);
+    this.anodeFromCathode = system.variableEntry(anode, cathode);
+    this.cathodeFromAnode = system.variableEntry(cathode, anode);
+    this.cathodeFromCathode = system.variableEntry(cathode, cathode);
     this.junction.capacitance = this.params.get("cjo");
 
     if (rs > 0) {
       system.stampResistor(this.node(0), this.node(2), rs);
     }
 
-    this.junction.stamp(system, this.node(this.junctionIndex()), this.node(1));
+    this.junction.stamp(system, anode, cathode);
   }
 
   override startStep(system: MnaSystem) {
@@ -355,57 +400,68 @@ export class Diode extends CircuitElement {
   }
 
   override stampStep(system: MnaSystem) {
-    const anode = this.node(this.junctionIndex());
-    const cathode = this.node(1);
-    const thermal = this.thermal();
+    const { volts, model } = this;
+    const { thermal, breakdown } = model;
+    const measured = (volts[model.junction] ?? 0) - (volts[1] ?? 0);
 
-    const measured =
-      (this.volts[this.junctionIndex()] ?? 0) - (this.volts[1] ?? 0);
-
-    // Newton has not converged while the junction voltage moves more than 10 mV.
-    if (Math.abs(measured - this.lastVoltage) > 0.01) {
-      system.converged = false;
-    }
+    const predicted =
+      this.linearCurrent +
+      this.linearConductance * (measured - this.linearVoltage);
 
     let voltage = limitJunction(
       measured,
       this.lastVoltage,
-      criticalVoltage(this.params.get("is"), thermal),
+      model.critical,
       thermal,
     );
 
-    const breakdown = this.params.get("bv");
-
     if (breakdown > 0 && voltage < 0) {
       // Past breakdown the reverse exponential needs the same damping.
+      const next = -(voltage + breakdown);
+
       const reverse = limitJunction(
-        -(voltage + breakdown),
+        next,
         -(this.lastVoltage + breakdown),
-        criticalVoltage(this.params.get("ibv"), thermal),
+        model.breakdownCritical,
         thermal,
       );
 
-      voltage = -(reverse + breakdown);
+      if (reverse !== next) {
+        voltage = -(reverse + breakdown);
+      }
     }
 
     this.lastVoltage = voltage;
 
     // Stamp the junction linearized at `voltage`: a conductance and a current source.
-    const { current, conductance } = this.junctionModel(voltage);
+    const current = this.junctionModel(voltage);
+    const conductance = this.modelConductance;
+
+    // Converged once a step lands where the last linearization predicted the current,
+    // as SPICE's test has it; a limited step lands somewhere the solution did not.
+    if (voltage !== measured || mispredicts(current, predicted)) {
+      system.converged = false;
+    }
+
+    const source = current - conductance * voltage;
 
     this.linearVoltage = voltage;
     this.linearCurrent = current;
     this.linearConductance = conductance;
-    system.stampConductance(anode, cathode, conductance);
-    system.stampCurrentSource(anode, cathode, current - conductance * voltage);
+    system.addEntry(this.anodeFromAnode, conductance);
+    system.addEntry(this.cathodeFromCathode, conductance);
+    system.addEntry(this.anodeFromCathode, -conductance);
+    system.addEntry(this.cathodeFromAnode, -conductance);
+    system.addRightSide(this.anodeRow, -source);
+    system.addRightSide(this.cathodeRow, source);
     this.junction.stampStep(system);
   }
 
   override finishStep(system: MnaSystem) {
     const voltage =
-      (this.volts[this.junctionIndex()] ?? 0) - (this.volts[1] ?? 0);
+      (this.volts[this.model.junction] ?? 0) - (this.volts[1] ?? 0);
 
-    this.junctionCurrent = this.junctionModel(voltage).current;
+    this.junctionCurrent = this.junctionModel(voltage);
     this.junction.finish(system, voltage);
     this.current = this.junctionCurrent + this.junction.current;
   }

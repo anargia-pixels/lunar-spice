@@ -87,15 +87,36 @@ function overrides(
   return element[hook] !== CircuitElement.prototype[hook];
 }
 
-/** An element's `nodes` and `volts`, read once so solves write its voltages directly. */
+/**
+ * The posts of some elements, read once so solves write their voltages directly: post
+ * `posts[entry]` of the `volts` at `volts[entry]` takes the voltage of node
+ * `nodes[entry]`.
+ */
 type PostVoltages = {
-  nodes: readonly number[];
-  volts: number[];
+  volts: number[][];
+  posts: Int32Array;
+  nodes: Int32Array;
 };
 
-/** Returns the `nodes` and `volts` of each of `elements`. */
-function postVoltagesOf(elements: readonly CircuitElement[]): PostVoltages[] {
-  return elements.map(({ nodes, volts }) => ({ nodes, volts }));
+/** Returns the posts of `elements`, one entry per post. */
+function postVoltagesOf(elements: readonly CircuitElement[]): PostVoltages {
+  const volts: number[][] = [];
+  const posts: number[] = [];
+  const nodes: number[] = [];
+
+  for (const element of elements) {
+    element.nodes.forEach((node, post) => {
+      volts.push(element.volts);
+      posts.push(post);
+      nodes.push(node);
+    });
+  }
+
+  return {
+    volts,
+    posts: Int32Array.from(posts),
+    nodes: Int32Array.from(nodes),
+  };
 }
 
 /** One voltage source of an element and the unknown that holds its current. */
@@ -131,9 +152,13 @@ type TreePoint = {
   isStartAtParent: boolean;
 };
 
-/** One wire network's spanning tree, and the ground at its root if there is one. */
+/**
+ * One wire network's spanning tree: its points from `first` up to `end` in the flat
+ * lists of `ConductorCurrents`, and the ground at its root if there is one.
+ */
 type Tree = {
-  points: readonly TreePoint[];
+  first: number;
+  end: number;
   ground: CircuitElement | null;
 };
 
@@ -141,13 +166,28 @@ type Tree = {
  * Wires and closed switches merge nodes, so the solve never sees their current. This
  * finds it from the currents of the other elements at each point, along a spanning tree
  * of each wire network; wires that close a loop carry none. The trees depend only on the
- * netlist, so they are built once and each update only sums currents.
+ * netlist, so they are built once, into flat lists, and each update only sums currents.
  */
 class ConductorCurrents {
   private readonly trees: Tree[] = [];
-  /** Conductors and grounds: the elements whose current only this class finds. */
-  private readonly owned: CircuitElement[] = [];
-  /** Current entering each tree point's subtree, reused by every update. */
+  /**
+   * Conductors and grounds, the elements whose current only this class finds, that no
+   * tree gives a current: wires that close a loop, and grounds a wire joins to another.
+   */
+  private readonly unused: CircuitElement[];
+  /**
+   * Every tree's points, tree by tree: the posts at point `p` are entries
+   * `postStart[p]` to `postStart[p + 1]` of `postElements` and `postIndices`.
+   */
+  private readonly postStart: Int32Array;
+  private readonly postElements: CircuitElement[] = [];
+  private readonly postIndices: Int32Array;
+  /** Each point's parent in the flat lists, and the conductor that joins them. */
+  private readonly parents: Int32Array;
+  private readonly edges: (CircuitElement | null)[] = [];
+  /** 1 where the conductor's start is at the parent. */
+  private readonly startsAtParent: Uint8Array;
+  /** Current entering each point's subtree, reused by every update. */
   private readonly totals: Float64Array;
 
   constructor(elements: readonly CircuitElement[]) {
@@ -155,6 +195,7 @@ class ConductorCurrents {
     const posts = new Map<string, PostRef[]>();
     const grounds = new Map<string, CircuitElement>();
     const labelPoints: string[] = [];
+    const owned: CircuitElement[] = [];
 
     /** Returns the list at `key`, and adds an empty one first when there is none. */
     const listAt = <T>(map: Map<string, T[]>, key: string) => {
@@ -177,7 +218,7 @@ class ConductorCurrents {
         const start = keys[first];
         const end = keys[second];
 
-        this.owned.push(element);
+        owned.push(element);
 
         if (start && end && start !== end) {
           listAt(edges, start).push({ element, other: end, isStart: true });
@@ -188,7 +229,7 @@ class ConductorCurrents {
       }
 
       if (element.isGround() && keys[0]) {
-        this.owned.push(element);
+        owned.push(element);
         grounds.set(keys[0], element);
         continue;
       }
@@ -203,7 +244,7 @@ class ConductorCurrents {
     // Current leaves a wire network at ground or a net label, so trees start there.
     const roots = [...grounds.keys(), ...labelPoints, ...edges.keys()];
     const visited = new Set<string>();
-    let pointCount = 0;
+    const allPoints: TreePoint[] = [];
 
     for (const root of roots) {
       if (visited.has(root)) {
@@ -243,47 +284,101 @@ class ConductorCurrents {
         }
       }
 
-      pointCount = Math.max(pointCount, points.length);
-      this.trees.push({ points, ground: grounds.get(root) ?? null });
+      const first = allPoints.length;
+      const ground = grounds.get(root) ?? null;
+
+      for (const point of points) {
+        const isRoot = point.parent < 0;
+
+        allPoints.push({
+          // Only a ground reads what enters the root, so without one it is not summed.
+          posts: isRoot && !ground ? [] : point.posts,
+          parent: isRoot ? -1 : first + point.parent,
+          edge: point.edge,
+          isStartAtParent: point.isStartAtParent,
+        });
+      }
+
+      this.trees.push({ first, end: allPoints.length, ground });
     }
 
-    this.totals = new Float64Array(pointCount);
+    const postIndices: number[] = [];
+
+    this.postStart = new Int32Array(allPoints.length + 1);
+    this.parents = new Int32Array(allPoints.length);
+    this.startsAtParent = new Uint8Array(allPoints.length);
+    allPoints.forEach((point, index) => {
+      this.postStart[index] = postIndices.length;
+      this.parents[index] = point.parent;
+      this.edges.push(point.edge);
+      this.startsAtParent[index] = point.isStartAtParent ? 1 : 0;
+
+      for (const { element, post } of point.posts) {
+        this.postElements.push(element);
+        postIndices.push(post);
+      }
+    });
+    this.postStart[allPoints.length] = postIndices.length;
+    this.postIndices = Int32Array.from(postIndices);
+    this.totals = new Float64Array(allPoints.length);
+
+    const used = new Set<CircuitElement | null>([
+      ...this.edges,
+      ...this.trees.map(({ ground }) => ground),
+    ]);
+
+    this.unused = owned.filter((element) => !used.has(element));
   }
 
   /** Sets the current of every conductor and ground from the other elements' currents. */
   update() {
-    const { totals } = this;
+    const { totals, postStart, postElements, postIndices } = this;
+    const { parents, edges, startsAtParent, unused, trees } = this;
 
-    // Grounds a wire joins to another ground carry nothing of their own.
-    for (const element of this.owned) {
-      element.current = 0;
+    for (let index = 0; index < unused.length; index += 1) {
+      const element = unused[index];
+
+      if (element !== undefined) {
+        element.current = 0;
+      }
     }
 
-    for (const { points, ground } of this.trees) {
-      // Sum the current that the other elements push into each point.
-      points.forEach(({ posts }, index) => {
-        let total = 0;
+    // Sum the current that the other elements push into each point.
+    for (let point = 0; point < totals.length; point += 1) {
+      const postEnd = postStart[point + 1] ?? 0;
+      let total = 0;
 
-        for (const { element, post } of posts) {
-          total -= element.currentIntoPost(post);
-        }
+      for (let entry = postStart[point] ?? 0; entry < postEnd; entry += 1) {
+        total -=
+          postElements[entry]?.currentIntoPost(postIndices[entry] ?? 0) ?? 0;
+      }
 
-        totals[index] = total;
-      });
+      totals[point] = total;
+    }
+
+    for (let index = 0; index < trees.length; index += 1) {
+      const tree = trees[index];
+
+      if (tree === undefined) {
+        continue;
+      }
+
+      const { first, end, ground } = tree;
 
       // Walk leaves first: each subtree's net current flows through its edge to the parent.
-      for (let index = points.length - 1; index > 0; index -= 1) {
-        const point = points[index];
-        const total = totals[index] ?? 0;
+      for (let point = end - 1; point > first; point -= 1) {
+        const edge = edges[point];
+        const total = totals[point] ?? 0;
+        const parent = parents[point] ?? first;
 
-        if (point?.edge) {
-          point.edge.current = point.isStartAtParent ? -total : total;
-          totals[point.parent] = (totals[point.parent] ?? 0) + total;
+        if (edge) {
+          edge.current = startsAtParent[point] ? -total : total;
+          totals[parent] = (totals[parent] ?? 0) + total;
         }
       }
 
       if (ground) {
-        ground.current = totals[0] ?? 0;
+        ground.current = totals[first] ?? 0;
       }
     }
   }
@@ -371,9 +466,9 @@ export class Simulation {
    * Voltages solves write: every iteration for nonlinear elements, after each step for
    * the others that take part in it, and on request for idle ones.
    */
-  private readonly iteratedVoltages: readonly PostVoltages[];
-  private readonly steppedVoltages: readonly PostVoltages[];
-  private readonly idleVoltages: readonly PostVoltages[];
+  private readonly iteratedVoltages: PostVoltages;
+  private readonly steppedVoltages: PostVoltages;
+  private readonly idleVoltages: PostVoltages;
   private readonly idleElements: ReadonlySet<CircuitElement>;
   /**
    * The list `updateIdleElementsAmong` was last given, whether it needs every wire
@@ -497,22 +592,15 @@ export class Simulation {
   }
 
   /** Copies node voltages from the solution onto the posts of `elements`. */
-  private applySolution(elements: readonly PostVoltages[]) {
+  private applySolution({ volts, posts, nodes }: PostVoltages) {
     const { solution } = this.system;
 
-    for (let index = 0; index < elements.length; index += 1) {
-      const element = elements[index];
+    for (let entry = 0; entry < nodes.length; entry += 1) {
+      const target = volts[entry];
+      const node = nodes[entry] ?? 0;
 
-      if (element === undefined) {
-        continue;
-      }
-
-      const { nodes, volts } = element;
-
-      for (let post = 0; post < nodes.length; post += 1) {
-        const node = nodes[post] ?? 0;
-
-        volts[post] = node > 0 ? (solution[node] ?? 0) : 0;
+      if (target !== undefined) {
+        target[posts[entry] ?? 0] = node > 0 ? (solution[node] ?? 0) : 0;
       }
     }
   }
@@ -601,7 +689,7 @@ export class Simulation {
         return true;
       }
 
-      if (iteration > 0 && this.isCycling(iteration) && givesUpOnCycles) {
+      if (givesUpOnCycles && iteration > 0 && this.isCycling(iteration)) {
         break;
       }
     }
@@ -623,6 +711,19 @@ export class Simulation {
     let earlierDistance = 0;
     let earliestDistance = 0;
 
+    this.lastIterate = earliestIterate;
+    this.earlierIterate = lastIterate;
+    this.earliestIterate = earlierIterate;
+
+    // A step's first solutions have nothing from the same step to be compared with yet.
+    if (iteration < 3) {
+      for (let index = 1; index < solution.length; index += 1) {
+        earliestIterate[index] = solution[index] ?? 0;
+      }
+
+      return false;
+    }
+
     for (let index = 1; index < solution.length; index += 1) {
       const value = solution[index] ?? 0;
 
@@ -642,16 +743,10 @@ export class Simulation {
       earliestIterate[index] = value;
     }
 
-    this.lastIterate = earliestIterate;
-    this.earlierIterate = lastIterate;
-    this.earliestIterate = earlierIterate;
-
     const reach = CYCLE_RATIO * lastDistance;
 
-    // A step's first solutions have nothing from the same step to be compared with yet.
     return (
-      (iteration >= 3 && earlierDistance <= reach) ||
-      (iteration >= 4 && earliestDistance <= reach)
+      earlierDistance <= reach || (iteration >= 4 && earliestDistance <= reach)
     );
   }
 
@@ -923,7 +1018,8 @@ export class Simulation {
 
       inner.system.solution.set(system.solution);
       inner.time = time;
-      inner.updatesIdleElements = this.updatesIdleElements;
+      // Idle elements read only the voltages, so the end of the whole step updates them.
+      inner.updatesIdleElements = false;
 
       if (inner.step()) {
         system.solution.set(inner.system.solution);
@@ -958,6 +1054,10 @@ export class Simulation {
 
     system.time = end;
     this.time = end;
+
+    if (this.updatesIdleElements) {
+      this.updateIdleElements();
+    }
 
     return true;
   }

@@ -161,7 +161,16 @@ export class MnaSystem {
       return;
     }
 
-    this.base.set(untimedBase);
+    // Only entries in the pattern ever hold a value.
+    const { base } = this;
+    const { indices } = this.pattern;
+
+    for (let entry = 0; entry < indices.length; entry += 1) {
+      const index = indices[entry] ?? 0;
+
+      base[index] = untimedBase[index] ?? 0;
+    }
+
     this.phase = BASE;
     this.stampTimed();
     this.isBaseCopied = false;
@@ -205,13 +214,21 @@ export class MnaSystem {
    * every Newton iteration of it. Linear elements stamp here, and never the matrix.
    */
   beginStep() {
-    const { size, stepRhs, baseRhs } = this;
+    const { size, stepRhs, baseRhs, matrix, base } = this;
 
     this.phase = STEP;
     this.target = stepRhs;
 
     if (!this.isBaseCopied) {
-      this.matrix.set(this.base);
+      const { indices } = this.pattern;
+
+      // Only entries in the pattern ever hold a value.
+      for (let entry = 0; entry < indices.length; entry += 1) {
+        const index = indices[entry] ?? 0;
+
+        matrix[index] = base[index] ?? 0;
+      }
+
       this.isBaseCopied = true;
     }
 

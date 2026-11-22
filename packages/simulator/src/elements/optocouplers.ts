@@ -1,6 +1,11 @@
 import { CircuitElement, type EditField, type TokenReader } from "../element";
 import { type Point, snapToGrid } from "../geometry";
-import type { AcSystem, MnaSystem } from "../mna-system";
+import {
+  type AcSystem,
+  type Handle,
+  mispredicts,
+  type MnaSystem,
+} from "../mna-system";
 import { ParamSet, type ParamSpec, type Preset } from "../params";
 import { formatSi } from "../units";
 import { Bjt, Diode } from "./semiconductors";
@@ -662,14 +667,41 @@ export class Vactrol extends LedCoupler {
   private heldLight = 0;
   /** The cell's conductance at the latest iteration. */
   conductance = 0;
-  /** The cell current's slope in the LED junction voltage, at the latest iteration. */
+  /**
+   * The cell current's slope in the LED junction voltage at the latest iteration, and
+   * the junction voltage it was taken at.
+   */
   private controlSlope = 0;
+  private controlVoltage = 0;
   /** How far the light moves toward the LED current in one step, rising or falling. */
   private riseBlend = 1;
   private fallBlend = 1;
   /** The curve's powers below and above `KNEE_CURRENT`, worked out in `stamp`. */
   private lowPower = 1;
   private highPower = 1;
+  /**
+   * The values each iteration reads, as `stamp` last worked them out: the dark
+   * conductance, the conductance at `KNEE_CURRENT` above it, and the light's rise and
+   * fall time constants.
+   */
+  private darkConductance = 0;
+  private kneeConductance = 0;
+  private riseTime = 0;
+  private fallTime = 0;
+  /**
+   * Where the cell stamps: the rows of its pins A and B, and in them each pin and the
+   * LED's two control nodes.
+   */
+  private rowA: Handle = 0;
+  private rowB: Handle = 0;
+  private aFromA: Handle = 0;
+  private aFromB: Handle = 0;
+  private bFromA: Handle = 0;
+  private bFromB: Handle = 0;
+  private aFromAnode: Handle = 0;
+  private aFromCathode: Handle = 0;
+  private bFromAnode: Handle = 0;
+  private bFromCathode: Handle = 0;
 
   static override read(
     x1: number,
@@ -698,16 +730,24 @@ export class Vactrol extends LedCoupler {
     return 0;
   }
 
-  /** Returns the cell's conductance at `light`, an LED current, and its slope in it. */
+  /** The LED and the cell both test their predicted currents. */
+  override hasExactConvergenceTest() {
+    return true;
+  }
+
+  /**
+   * Returns the cell's conductance at `light`, an LED current, and its slope in it, with
+   * the values `stamp` worked out.
+   */
   cellConductance(light: number) {
-    const dark = 1 / this.params.get("rdark");
+    const dark = this.darkConductance;
 
     if (light <= MIN_LIGHT) {
       return { conductance: dark, slope: 0 };
     }
 
     const power = light <= KNEE_CURRENT ? this.lowPower : this.highPower;
-    const lit = (light / KNEE_CURRENT) ** power / this.params.get("r10");
+    const lit = (light / KNEE_CURRENT) ** power * this.kneeConductance;
 
     return { conductance: dark + lit, slope: (power * lit) / light };
   }
@@ -740,12 +780,31 @@ export class Vactrol extends LedCoupler {
     // The resistance falls as the light rises, never the other way.
     this.lowPower = Math.max(0, Math.log(r1 / r10) / Math.log(10));
     this.highPower = Math.max(0, Math.log(r10 / r40) / Math.log(4));
+    this.darkConductance = 1 / this.params.get("rdark");
+    this.kneeConductance = 1 / r10;
+    this.riseTime = this.params.get("ton");
+    this.fallTime = this.fallTimeConstant();
+
+    const a = this.node(OUTPUT_A);
+    const b = this.node(OUTPUT_B);
+    const [anode, cathode] = this.ledControl();
+
+    this.rowA = system.rightSideRow(a);
+    this.rowB = system.rightSideRow(b);
+    this.aFromA = system.variableEntry(a, a);
+    this.aFromB = system.variableEntry(a, b);
+    this.bFromA = system.variableEntry(b, a);
+    this.bFromB = system.variableEntry(b, b);
+    this.aFromAnode = system.variableEntry(a, anode);
+    this.aFromCathode = system.variableEntry(a, cathode);
+    this.bFromAnode = system.variableEntry(b, anode);
+    this.bFromCathode = system.variableEntry(b, cathode);
   }
 
   override startStep(system: MnaSystem) {
     super.startStep(system);
-    this.riseBlend = lagBlend(system.timeStep, this.params.get("ton"));
-    this.fallBlend = lagBlend(system.timeStep, this.fallTimeConstant());
+    this.riseBlend = lagBlend(system.timeStep, this.riseTime);
+    this.fallBlend = lagBlend(system.timeStep, this.fallTime);
   }
 
   protected stampOutput(system: MnaSystem) {
@@ -762,18 +821,18 @@ export class Vactrol extends LedCoupler {
 
     const light = held + blend * (target - held);
     const { conductance, slope } = this.cellConductance(light);
-    const a = this.node(OUTPUT_A);
-    const b = this.node(OUTPUT_B);
-    const [anode, cathode] = this.ledControl();
 
     const cellVoltage =
       (this.volts[OUTPUT_A] ?? 0) - (this.volts[OUTPUT_B] ?? 0);
 
-    // Newton has not converged while the light still moves.
-    if (
-      Math.abs(light - this.light) >
-      LIGHT_RELTOL * Math.abs(light) + MIN_LIGHT
-    ) {
+    const { linearVoltage } = this.led;
+
+    const predicted =
+      this.conductance * cellVoltage +
+      this.controlSlope * (linearVoltage - this.controlVoltage);
+
+    // Converged once the cell current lands where the last linearization predicted.
+    if (mispredicts(conductance * cellVoltage, predicted)) {
       system.converged = false;
     }
 
@@ -781,13 +840,19 @@ export class Vactrol extends LedCoupler {
     this.conductance = conductance;
     // The cell current G × V, linearized in the LED junction voltage too.
     this.controlSlope = slope * blend * targetSlope * cellVoltage;
-    system.stampConductance(a, b, conductance);
-    system.stampCurrentSource(
-      a,
-      b,
-      -this.controlSlope * this.led.linearVoltage,
-    );
-    stampControlledCurrent(system, a, b, anode, cathode, this.controlSlope);
+    this.controlVoltage = linearVoltage;
+    system.addEntry(this.aFromA, conductance);
+    system.addEntry(this.bFromB, conductance);
+    system.addEntry(this.aFromB, -conductance);
+    system.addEntry(this.bFromA, -conductance);
+    // A current source pushing -controlSlope × the junction voltage from A into B.
+    system.addRightSide(this.rowA, this.controlSlope * linearVoltage);
+    system.addRightSide(this.rowB, -this.controlSlope * linearVoltage);
+    // The controlled current from A into B, controlSlope × (V(anode) − V(cathode)).
+    system.addEntry(this.aFromAnode, this.controlSlope);
+    system.addEntry(this.aFromCathode, -this.controlSlope);
+    system.addEntry(this.bFromAnode, -this.controlSlope);
+    system.addEntry(this.bFromCathode, this.controlSlope);
   }
 
   override finishStep(system: MnaSystem) {
@@ -835,6 +900,7 @@ export class Vactrol extends LedCoupler {
     this.heldLight = 0;
     this.conductance = 0;
     this.controlSlope = 0;
+    this.controlVoltage = 0;
   }
 
   override info() {

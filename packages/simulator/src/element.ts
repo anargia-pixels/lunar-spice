@@ -407,7 +407,7 @@ export abstract class CircuitElement {
    * Newton can stop without solving again: its test checks the current its last
    * linearization predicts (`mispredicts`), or its stamps change only when it reports a
    * change. A test that only bounds how far the operating point moved, such as the
-   * diode's 10 mV, needs one more solve.
+   * JFET gate junctions' 10 mV, needs one more solve.
    */
   hasExactConvergenceTest() {
     return false;

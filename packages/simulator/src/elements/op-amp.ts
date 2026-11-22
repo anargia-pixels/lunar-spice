@@ -333,6 +333,9 @@ export class OpAmp extends CircuitElement {
   private settledStep = 0;
   /** Seconds from the latest step's end to the next breakpoint, as `finishStep` predicts. */
   private untilBreakpoint = Number.POSITIVE_INFINITY;
+  /** The output swing VCC and VEE allowed when `findSupplySwing` last looked. */
+  private supplyHigh = 0;
+  private supplyLow = 0;
   /** Where the pole stage stamps: the pole node's row, and in it the inputs and itself. */
   private poleRow: Handle = 0;
   private poleFromInverting: Handle = 0;
@@ -573,11 +576,12 @@ export class OpAmp extends CircuitElement {
 
     this.stageInput = Number.NaN;
 
-    const [vmax, vmin] = this.hasSupplyPosts
-      ? this.supplySwing()
-      : [this.stage.vmax, this.stage.vmin];
-
-    this.setSwing(vmax, vmin);
+    if (this.hasSupplyPosts) {
+      this.findSupplySwing();
+      this.setSwing(this.supplyHigh, this.supplyLow);
+    } else {
+      this.setSwing(this.stage.vmax, this.stage.vmin);
+    }
 
     if (!hasPole) {
       return;
@@ -912,7 +916,11 @@ export class OpAmp extends CircuitElement {
    */
   private followSupplies() {
     const { vmax, vmin } = this.stage;
-    const [top, bottom] = this.supplySwing();
+
+    this.findSupplySwing();
+
+    const top = this.supplyHigh;
+    const bottom = this.supplyLow;
 
     if (top === vmax && bottom === vmin) {
       return false;
@@ -926,15 +934,22 @@ export class OpAmp extends CircuitElement {
     );
   }
 
-  /** Returns the highest and lowest output that VCC and VEE now allow. */
-  private supplySwing() {
+  /**
+   * Works out the highest and lowest output that VCC and VEE now allow, into
+   * `supplyHigh` and `supplyLow`: every iteration asks, so no pair is made for them.
+   */
+  private findSupplySwing() {
     const { dropHigh, dropLow } = this.stage;
-    const [, , , vcc = 0, vee = 0] = this.volts;
+    const vcc = this.volts[3] ?? 0;
+    const vee = this.volts[4] ?? 0;
     const high = vcc - dropHigh;
     const low = vee + dropLow;
 
     if (high >= low) {
-      return [high, low] as const;
+      this.supplyHigh = high;
+      this.supplyLow = low;
+
+      return;
     }
 
     // Kept between the supplies, so an unpowered op-amp's output sits at their level.
@@ -943,7 +958,8 @@ export class OpAmp extends CircuitElement {
       Math.max(vcc, vee),
     );
 
-    return [middle, middle] as const;
+    this.supplyHigh = middle;
+    this.supplyLow = middle;
   }
 
   /** Sets the output swing, and with it where the limiters let go and how hard they hold. */
@@ -1024,11 +1040,20 @@ export class OpAmp extends CircuitElement {
   }
 
   override currentIntoPost(post: number) {
-    const rin = this.params.get("rin");
-    const [inverting = 0, nonInverting = 0] = this.volts;
-    const inputCurrent = rin > 0 ? (inverting - nonInverting) / rin : 0;
+    if (post === 2) {
+      return this.current;
+    }
 
-    return [inputCurrent, -inputCurrent, this.current][post] ?? 0;
+    if (post > 2) {
+      return 0;
+    }
+
+    const rin = this.params.get("rin");
+
+    const inputCurrent =
+      rin > 0 ? ((this.volts[0] ?? 0) - (this.volts[1] ?? 0)) / rin : 0;
+
+    return post === 0 ? inputCurrent : -inputCurrent;
   }
 
   override reset() {
