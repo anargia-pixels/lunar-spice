@@ -102,6 +102,20 @@ export class MatrixPattern {
   }
 }
 
+/** What `choosePivot` reads of the elimination `analyze` is in the middle of. */
+type PivotSearch = {
+  /** The pivot being chosen: rows and columns from it on are not yet eliminated. */
+  pivot: number;
+  dense: Float64Array;
+  rows: Int32Array;
+  columnPositions: Int32Array;
+  rowColumns: readonly (readonly number[])[];
+  rowCounts: Int32Array;
+  columnCounts: Int32Array;
+  /** The largest entry left in each column, indexed by column. */
+  columnLargest: Float64Array;
+};
+
 /** What `analyze` works out for each pivot before it is stored flat. */
 type Elimination = {
   /** The rows each pivot eliminates and the columns right of it, one list per pivot. */
@@ -515,6 +529,8 @@ export class LuMatrix {
    * `PIVOT_THRESHOLD` of their column's largest, the one whose row and column hold the
    * fewest others, so the factors fill in the fewest zeros. Rows and columns without a
    * variable entry go first. Records the eliminations, then factors `source` along them.
+   * It walks each row's entries rather than the whole matrix: pivots are chosen again
+   * whenever one gets too small, and circuit matrices are mostly zeros.
    */
   private analyze(source: Float64Array, pattern: MatrixPattern) {
     const { size, pivotRows, pivotColumns } = this;
@@ -524,9 +540,16 @@ export class LuMatrix {
     const isVariableColumn = new Uint8Array(size);
     const rowCounts = new Int32Array(size);
     const columnCounts = new Int32Array(size);
+    /** The largest entry left in each column, indexed by column. */
     const columnLargest = new Float64Array(size);
     const rows = Int32Array.from({ length: size }, (_, index) => index);
     const columns = Int32Array.from(rows);
+    /** Where each row and column now sits in `rows` and `columns`. */
+    const rowPositions = Int32Array.from(rows);
+    const columnPositions = Int32Array.from(rows);
+    /** The columns of each row's entries and the rows of each column's, fill-in included. */
+    const rowColumns: number[][] = Array.from({ length: size }, () => []);
+    const columnRows: number[][] = Array.from({ length: size }, () => []);
     const elimination: Elimination = { lower: [], upper: [] };
     let isConstant = true;
 
@@ -543,6 +566,8 @@ export class LuMatrix {
       isNonzero[index] = 1;
       rowCounts[row] = (rowCounts[row] ?? 0) + 1;
       columnCounts[column] = (columnCounts[column] ?? 0) + 1;
+      rowColumns[row]?.push(column);
+      columnRows[column]?.push(row);
     }
 
     for (const index of pattern.variable) {
@@ -550,36 +575,41 @@ export class LuMatrix {
       isVariableColumn[index % size] = 1;
     }
 
+    const search: PivotSearch = {
+      pivot: 0,
+      dense,
+      rows,
+      columnPositions,
+      rowColumns,
+      rowCounts,
+      columnCounts,
+      columnLargest,
+    };
+
     for (let pivot = 0; pivot < size; pivot += 1) {
       // Rows and columns from `pivot` on are not yet eliminated.
       for (let at = pivot; at < size; at += 1) {
-        columnLargest[at] = 0;
+        columnLargest[columns[at] ?? 0] = 0;
       }
 
       for (let rowAt = pivot; rowAt < size; rowAt += 1) {
-        const rowStart = (rows[rowAt] ?? 0) * size;
+        const row = rows[rowAt] ?? 0;
+        const rowStart = row * size;
 
-        for (let columnAt = pivot; columnAt < size; columnAt += 1) {
-          columnLargest[columnAt] = Math.max(
-            columnLargest[columnAt] ?? 0,
-            Math.abs(dense[rowStart + (columns[columnAt] ?? 0)] ?? 0),
-          );
+        for (const column of rowColumns[row] ?? []) {
+          if ((columnPositions[column] ?? 0) >= pivot) {
+            columnLargest[column] = Math.max(
+              columnLargest[column] ?? 0,
+              Math.abs(dense[rowStart + column] ?? 0),
+            );
+          }
         }
       }
 
+      search.pivot = pivot;
+
       let best = isConstant
-        ? this.choosePivot(
-            pivot,
-            dense,
-            rows,
-            columns,
-            isNonzero,
-            rowCounts,
-            columnCounts,
-            columnLargest,
-            isVariableRow,
-            isVariableColumn,
-          )
+        ? this.choosePivot(search, isVariableRow, isVariableColumn)
         : null;
 
       // No constant row and column are left to pair: the rest changes with the variables.
@@ -589,31 +619,22 @@ export class LuMatrix {
           this.constantPivots = pivot;
         }
 
-        best = this.choosePivot(
-          pivot,
-          dense,
-          rows,
-          columns,
-          isNonzero,
-          rowCounts,
-          columnCounts,
-          columnLargest,
-          null,
-          null,
-        );
+        best = this.choosePivot(search, null, null);
       }
 
       if (!best) {
         // Name the column with the smallest entries as the one without a pivot.
-        let smallest = pivot;
+        let smallest = columns[pivot] ?? 0;
 
         for (let columnAt = pivot; columnAt < size; columnAt += 1) {
-          if ((columnLargest[columnAt] ?? 0) < (columnLargest[smallest] ?? 0)) {
-            smallest = columnAt;
+          const column = columns[columnAt] ?? 0;
+
+          if ((columnLargest[column] ?? 0) < (columnLargest[smallest] ?? 0)) {
+            smallest = column;
           }
         }
 
-        this.singularColumn = columns[smallest] ?? 0;
+        this.singularColumn = smallest;
 
         return false;
       }
@@ -621,37 +642,45 @@ export class LuMatrix {
       const [pivotRowAt, pivotColumnAt] = best;
       const pivotRow = rows[pivotRowAt] ?? 0;
       const pivotColumn = columns[pivotColumnAt] ?? 0;
+      const swappedRow = rows[pivot] ?? 0;
+      const swappedColumn = columns[pivot] ?? 0;
 
-      rows[pivotRowAt] = rows[pivot] ?? 0;
+      rows[pivotRowAt] = swappedRow;
       rows[pivot] = pivotRow;
-      columns[pivotColumnAt] = columns[pivot] ?? 0;
+      rowPositions[swappedRow] = pivotRowAt;
+      rowPositions[pivotRow] = pivot;
+      columns[pivotColumnAt] = swappedColumn;
       columns[pivot] = pivotColumn;
+      columnPositions[swappedColumn] = pivotColumnAt;
+      columnPositions[pivotColumn] = pivot;
       pivotRows[pivot] = pivotRow;
       pivotColumns[pivot] = pivotColumn;
 
       const pivotStart = pivotRow * size;
       const pivotValue = dense[pivotStart + pivotColumn] ?? 1;
-      const lower: number[] = [];
-      const upper: number[] = [];
 
-      for (let at = pivot + 1; at < size; at += 1) {
-        const column = columns[at] ?? 0;
+      // The entries right of and below the pivot, in the order the rows and columns sit.
+      const upper = (rowColumns[pivotRow] ?? [])
+        .filter((column) => (columnPositions[column] ?? 0) > pivot)
+        .sort(
+          (first, second) =>
+            (columnPositions[first] ?? 0) - (columnPositions[second] ?? 0),
+        );
 
-        if (isNonzero[pivotStart + column]) {
-          upper.push(column);
-          columnCounts[column] = (columnCounts[column] ?? 0) - 1;
-        }
+      const lower = (columnRows[pivotColumn] ?? [])
+        .filter((row) => (rowPositions[row] ?? 0) > pivot)
+        .sort(
+          (first, second) =>
+            (rowPositions[first] ?? 0) - (rowPositions[second] ?? 0),
+        );
+
+      for (const column of upper) {
+        columnCounts[column] = (columnCounts[column] ?? 0) - 1;
       }
 
-      for (let at = pivot + 1; at < size; at += 1) {
-        const row = rows[at] ?? 0;
+      for (const row of lower) {
         const rowStart = row * size;
 
-        if (!isNonzero[rowStart + pivotColumn]) {
-          continue;
-        }
-
-        lower.push(row);
         rowCounts[row] = (rowCounts[row] ?? 0) - 1;
 
         const factor = (dense[rowStart + pivotColumn] ?? 0) / pivotValue;
@@ -663,6 +692,8 @@ export class LuMatrix {
             isNonzero[target] = 1;
             rowCounts[row] = (rowCounts[row] ?? 0) + 1;
             columnCounts[column] = (columnCounts[column] ?? 0) + 1;
+            rowColumns[row]?.push(column);
+            columnRows[column]?.push(row);
           }
 
           dense[target] =
@@ -689,20 +720,16 @@ export class LuMatrix {
   /**
    * Returns the positions in `rows` and `columns` of the next pivot, from `pivot` on, or
    * null when no entry is large enough. With `isVariableRow` and `isVariableColumn`, only
-   * rows and columns they leave unmarked are considered.
+   * rows and columns they leave unmarked are considered. Of equal candidates, the first
+   * row and in it the first column wins.
    */
   private choosePivot(
-    pivot: number,
-    dense: Float64Array,
-    rows: Int32Array,
-    columns: Int32Array,
-    isNonzero: Uint8Array,
-    rowCounts: Int32Array,
-    columnCounts: Int32Array,
-    columnLargest: Float64Array,
+    search: PivotSearch,
     isVariableRow: Uint8Array | null,
     isVariableColumn: Uint8Array | null,
   ): [number, number] | null {
+    const { pivot, dense, rows, columnPositions, rowColumns } = search;
+    const { rowCounts, columnCounts, columnLargest } = search;
     const { size } = this;
     let best: [number, number] | null = null;
     let bestCost = Number.POSITIVE_INFINITY;
@@ -716,15 +743,15 @@ export class LuMatrix {
         continue;
       }
 
-      for (let columnAt = pivot; columnAt < size; columnAt += 1) {
-        const column = columns[columnAt] ?? 0;
+      for (const column of rowColumns[row] ?? []) {
+        const columnAt = columnPositions[column] ?? 0;
 
-        if (!isNonzero[rowStart + column] || isVariableColumn?.[column]) {
+        if (columnAt < pivot || isVariableColumn?.[column]) {
           continue;
         }
 
         const magnitude = Math.abs(dense[rowStart + column] ?? 0);
-        const largest = columnLargest[columnAt] ?? 0;
+        const largest = columnLargest[column] ?? 0;
 
         if (
           !(magnitude > SINGULAR_PIVOT) ||
@@ -738,7 +765,14 @@ export class LuMatrix {
 
         const ratio = magnitude / largest;
 
-        if (cost < bestCost || (cost === bestCost && ratio > bestRatio)) {
+        if (
+          cost < bestCost ||
+          (cost === bestCost &&
+            (ratio > bestRatio ||
+              (ratio === bestRatio &&
+                best?.[0] === rowAt &&
+                columnAt < best[1])))
+        ) {
           best = [rowAt, columnAt];
           bestCost = cost;
           bestRatio = ratio;

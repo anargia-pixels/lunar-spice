@@ -67,6 +67,14 @@ const LANDING_DIVISIONS = 16;
  */
 const LANDING_DRIFTS = 2;
 
+/**
+ * How many times a landing step may fail at the same length from the same time before
+ * the landings from that time are shortened like any other failed step. A landing's
+ * length comes from the prediction alone, so without this one that keeps failing is
+ * retried forever.
+ */
+const MAX_LANDING_RETRIES = 8;
+
 /** How close two step lengths must be, relative to them, to count as the same. */
 const LENGTH_TOLERANCE = 1e-9;
 
@@ -985,6 +993,14 @@ export class Simulation {
     const end = this.time + system.timeStep;
     let time = this.time;
     let next = first;
+    /**
+     * The step that failed last, and how many times in a row it has; true once landings
+     * from that time have failed too often and are shortened.
+     */
+    let failedAt = Number.NaN;
+    let failedLength = Number.NaN;
+    let retries = 0;
+    let shortensLandings = false;
 
     this.error = null;
     this.faults = [];
@@ -1010,6 +1026,10 @@ export class Simulation {
             : most;
 
         length = untilBreakpoint - Math.max(crossing / 2, margin);
+
+        if (time === failedAt && shortensLandings) {
+          length = Math.min(length, next);
+        }
       } else {
         length = this.alignedLength(length, remaining);
       }
@@ -1050,6 +1070,12 @@ export class Simulation {
       this.applySolution(this.iteratedVoltages);
       this.predictionDrift = Number.POSITIVE_INFINITY;
       next = length / STEP_DIVISIONS;
+      retries = time === failedAt && length === failedLength ? retries + 1 : 1;
+      shortensLandings =
+        (time === failedAt && shortensLandings) ||
+        retries >= MAX_LANDING_RETRIES;
+      failedAt = time;
+      failedLength = length;
     }
 
     system.time = end;
