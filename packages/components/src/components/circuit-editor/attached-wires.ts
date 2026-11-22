@@ -1,19 +1,23 @@
 import { createElement } from "@lunar-spice/simulator/circuit";
 import type { CircuitElement } from "@lunar-spice/simulator/element";
 import { type Point, pointKey } from "@lunar-spice/simulator/geometry";
+import { wireRun } from "@lunar-spice/simulator/wiring";
 
-type Axis = "horizontal" | "vertical";
+import { type Axis, RouteObstacles, routeWire } from "./wire-router";
 
 /**
  * A connection kept while the selection moves: a wire end resting on a moving post, or a
  * part that touches one directly, which gets a new wire once the post moves away.
  */
 type Attachment = {
-  /** The wire that follows: one that was there, or the new one, once it is needed. */
-  wire: CircuitElement | null;
-  /** True for a part's connection, whose wire the move adds and may take away again. */
+  /**
+   * The wires from `fixed` to the post, in order: for a wire that was there, it first and
+   * then the bends the move added; for a part's connection, only what the move added.
+   */
+  wires: CircuitElement[];
+  /** True for a part's connection, whose wires the move adds and may take away again. */
   isNew: boolean;
-  /** Which end of `wire` follows the post; a new wire follows with its end. */
+  /** Which end of the wire that was there follows the post. */
   isStart: boolean;
   /** Where the moving post started. */
   from: Point;
@@ -21,12 +25,13 @@ type Attachment = {
   fixed: Point;
   /** Which way the wire leaves `fixed`; null for a wire that ran at an angle. */
   axis: Axis | null;
-  /** The second wire that keeps it square, while it needs one. */
-  bend: CircuitElement | null;
 };
 
 /** A wire with both ends on the selection, and where those ends started. */
 type CarriedWire = { wire: CircuitElement; start: Point; end: Point };
+
+/** A selected element and where its posts were when the move started. */
+type StartingPosts = { element: CircuitElement; posts: readonly Point[] };
 
 function isSamePoint(a: Point, b: Point) {
   return a.x === b.x && a.y === b.y;
@@ -41,22 +46,31 @@ function axisOf({ start, end }: CircuitElement): Axis | null {
 }
 
 /**
- * Where a wire leaving `fixed` along `axis` turns toward `target`, keeping it square;
- * null when it reaches `target` in a straight line or ran at an angle to begin with.
+ * The wires of `wire`'s run in order from `from`, each with its end away from `from`;
+ * the last one's is the run's far end.
  */
-function cornerFor(axis: Axis | null, fixed: Point, target: Point) {
-  if (axis === null) {
-    return null;
+function runFrom(
+  elements: readonly CircuitElement[],
+  wire: CircuitElement,
+  from: Point,
+) {
+  const remaining = new Set(wireRun(elements, wire));
+  const run: { wire: CircuitElement; fixed: Point }[] = [];
+  let at = from;
+
+  for (
+    let next: CircuitElement | undefined = wire;
+    next;
+    next = [...remaining].find((other) =>
+      [other.start, other.end].some((end) => isSamePoint(end, at)),
+    )
+  ) {
+    remaining.delete(next);
+    at = isSamePoint(next.start, at) ? next.end : next.start;
+    run.push({ wire: next, fixed: at });
   }
 
-  const corner =
-    axis === "horizontal"
-      ? { x: target.x, y: fixed.y }
-      : { x: fixed.x, y: target.y };
-
-  return isSamePoint(corner, target) || isSamePoint(corner, fixed)
-    ? null
-    : corner;
+  return run;
 }
 
 function setEnd(wire: CircuitElement, isStart: boolean, point: Point) {
@@ -75,24 +89,33 @@ function setEnds(wire: CircuitElement, start: Point, end: Point) {
 }
 
 /**
- * The wires that keep a moving selection connected. A wire with one end on a moving post
- * stretches to follow it; a part that touches a moving post directly gets a new wire
- * from its post. Where following straight would leave a wire at an angle, a second wire
- * adds a right-angle bend, so wiring stays on the grid. A wire with both ends on the
- * selection moves whole. Built when the move starts, from the posts as they are then.
+ * The wires that keep a moving selection connected, as in Multisim. A wire with one end
+ * on a moving post follows it; a part that touches a moving post directly gets a new
+ * wire from its post. Each reroutes on the grid, with bends where it needs them and
+ * around posts, wires and parts it would otherwise join or cover. A wire with both ends
+ * on the selection moves with it. Built when the move starts, from the posts as they are
+ * then; the move may slide the selection, turn it or flip it. With `isRerouted`, as for
+ * a turn or flip, each wire is laid again whole from its far junction or pin, since the
+ * way it ran no longer fits; otherwise only the stretch on the post follows it.
  */
 export class AttachedWires {
+  private readonly elements: readonly CircuitElement[];
+  private readonly starting: StartingPosts[];
   private readonly carried: CarriedWire[] = [];
   private readonly attachments: Attachment[] = [];
 
   constructor(
     elements: readonly CircuitElement[],
     selection: ReadonlySet<CircuitElement>,
+    isRerouted = false,
   ) {
+    this.elements = [...elements];
+    this.starting = elements.flatMap((element) =>
+      selection.has(element) ? [{ element, posts: element.posts() }] : [],
+    );
+
     const posts = new Set(
-      elements
-        .filter((element) => selection.has(element))
-        .flatMap((element) => element.posts().map(pointKey)),
+      this.starting.flatMap(({ posts: points }) => points.map(pointKey)),
     );
 
     // The axes of the parts that stay at each moving post, for their new wires.
@@ -125,14 +148,32 @@ export class AttachedWires {
       if (isStartOn && isEndOn) {
         this.carried.push({ wire: element, start, end });
       } else if (isStartOn || isEndOn) {
+        const from = isStartOn ? start : end;
+        const run = isRerouted ? runFrom(elements, element, from) : null;
+        const far = run?.at(-1)?.fixed;
+
+        // A run that ends on the selection again, or holds part of it, follows by its
+        // stretch on the post alone.
+        const isWhole =
+          run !== null &&
+          far !== undefined &&
+          !posts.has(pointKey(far)) &&
+          run.every(({ wire }) => !selection.has(wire));
+
+        const wires = isWhole
+          ? run.map(({ wire }) => wire).reverse()
+          : [element];
+
+        const [first = element] = wires;
+        const fixed = isWhole && far ? far : isStartOn ? end : start;
+
         this.attachments.push({
-          wire: element,
+          wires,
           isNew: false,
-          isStart: isStartOn,
-          from: isStartOn ? start : end,
-          fixed: isStartOn ? end : start,
-          axis: axisOf(element),
-          bend: null,
+          isStart: pointKey(first.start) !== pointKey(fixed),
+          from,
+          fixed,
+          axis: axisOf(first),
         });
       }
     }
@@ -141,7 +182,7 @@ export class AttachedWires {
     // that lie flat along a row, so it never runs back over one of them.
     for (const { point, axes } of partsAt.values()) {
       this.attachments.push({
-        wire: null,
+        wires: [],
         isNew: true,
         isStart: false,
         from: point,
@@ -149,7 +190,6 @@ export class AttachedWires {
         axis: axes.every((axis) => axis === "horizontal")
           ? "vertical"
           : "horizontal",
-        bend: null,
       });
     }
   }
@@ -159,65 +199,109 @@ export class AttachedWires {
    * Returns the wires to add to the circuit and the ones it no longer needs.
    */
   moveBy(dx: number, dy: number) {
+    return this.place((point) => ({ x: point.x + dx, y: point.y + dy }));
+  }
+
+  /**
+   * Places the wires for a selection turned or flipped since the move started: each
+   * wire follows its post to wherever that post is now. Returns the wires to add to the
+   * circuit and the ones it no longer needs.
+   */
+  followPosts() {
+    const moved = new Map<string, Point>();
+
+    for (const { element, posts } of this.starting) {
+      const now = element.posts();
+
+      posts.forEach((post, index) => {
+        const key = pointKey(post);
+        const target = now[index];
+
+        if (target && !moved.has(key)) {
+          moved.set(key, target);
+        }
+      });
+    }
+
+    return this.place((point) => moved.get(pointKey(point)) ?? point);
+  }
+
+  /** Reroutes every wire to where `targetOf` says its moving post went. */
+  private place(targetOf: (point: Point) => Point) {
     const added: CircuitElement[] = [];
     const removed: CircuitElement[] = [];
 
-    const drop = (wire: CircuitElement | null) => {
-      if (wire) {
-        removed.push(wire);
-      }
-
-      return null;
-    };
-
     for (const { wire, start, end } of this.carried) {
-      setEnds(
-        wire,
-        { x: start.x + dx, y: start.y + dy },
-        { x: end.x + dx, y: end.y + dy },
-      );
+      setEnds(wire, targetOf(start), targetOf(end));
+    }
+
+    // Each route keeps clear of everything else, the routes placed before it included.
+    const owned = new Set(this.attachments.flatMap(({ wires }) => wires));
+
+    const obstacles = new RouteObstacles(
+      this.elements.filter((element) => !owned.has(element)),
+    );
+
+    for (const { fixed } of this.attachments) {
+      obstacles.addPost(fixed);
     }
 
     for (const attachment of this.attachments) {
-      const { from, fixed, axis } = attachment;
-      const target = { x: from.x + dx, y: from.y + dy };
+      const { from, fixed, axis, isNew, isStart, wires } = attachment;
+      const target = targetOf(from);
 
-      // Back where it started, a part needs no wire of its own.
-      if (attachment.isNew && isSamePoint(target, fixed)) {
-        attachment.wire = drop(attachment.wire);
-        attachment.bend = drop(attachment.bend);
-        continue;
+      // A wire that ran at an angle keeps running straight to its post.
+      const route =
+        axis === null && !isNew
+          ? [fixed, target]
+          : routeWire(fixed, target, axis, obstacles);
+
+      const stretches = route.slice(1).map((to, index) => ({
+        from: route[index] ?? to,
+        to,
+      }));
+
+      // The wire that was there keeps its fixed end and takes the first stretch; back
+      // where it started, a part needs no wire of its own.
+      const [first, ...bends] = wires;
+      const kept = isNew ? [] : [first];
+      const reused = isNew ? wires : bends;
+      const needed = isNew ? stretches : stretches.slice(1);
+
+      if (!isNew && first) {
+        setEnd(first, isStart, stretches[0]?.to ?? fixed);
       }
 
-      const corner = cornerFor(axis, fixed, target);
-      const reach = corner ?? target;
+      const placed = needed.map((stretch, index) => {
+        const wire = reused[index];
 
-      if (attachment.wire) {
-        setEnd(attachment.wire, attachment.isStart, reach);
-      } else {
-        attachment.wire = createElement(
-          "wire",
-          fixed.x,
-          fixed.y,
-          reach.x,
-          reach.y,
-        );
-        added.push(attachment.wire);
-      }
+        if (wire) {
+          setEnds(wire, stretch.from, stretch.to);
 
-      if (!corner) {
-        attachment.bend = drop(attachment.bend);
-      } else if (attachment.bend) {
-        setEnds(attachment.bend, corner, target);
-      } else {
-        attachment.bend = createElement(
+          return wire;
+        }
+
+        const created = createElement(
           "wire",
-          corner.x,
-          corner.y,
-          target.x,
-          target.y,
+          stretch.from.x,
+          stretch.from.y,
+          stretch.to.x,
+          stretch.to.y,
         );
-        added.push(attachment.bend);
+
+        added.push(created);
+
+        return created;
+      });
+
+      removed.push(...reused.slice(needed.length));
+      attachment.wires = [
+        ...kept.filter((wire) => wire !== undefined),
+        ...placed,
+      ];
+
+      for (const { from: start, to } of stretches) {
+        obstacles.addWire(start, to);
       }
     }
 
@@ -226,7 +310,7 @@ export class AttachedWires {
 
   /** The wires that were there and that the move shrank to a point, to delete. */
   collapsed() {
-    return this.attachments.flatMap(({ wire, isNew }) =>
+    return this.attachments.flatMap(({ wires: [wire], isNew }) =>
       wire && !isNew && isSamePoint(wire.start, wire.end) ? [wire] : [],
     );
   }

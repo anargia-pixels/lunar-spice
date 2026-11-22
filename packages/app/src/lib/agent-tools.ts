@@ -28,6 +28,7 @@ import {
 } from "@lunar-spice/simulator/geometry";
 import { buildNetlist } from "@lunar-spice/simulator/netlist";
 import { parseSi } from "@lunar-spice/simulator/units";
+import { deleteWithWires } from "@lunar-spice/simulator/wiring";
 
 import type { AnalysisRequest } from "./analysis-request";
 
@@ -1273,7 +1274,7 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
     name: "delete_parts",
     title: "Delete parts",
     description:
-      "Deletes parts, wires or labels by reference (R1, or #n from get_circuit) as one undo step. Numbers after # shift once something is deleted, so read the circuit again before using them.",
+      "Deletes parts, wires or labels by reference (R1, or #n from get_circuit) as one undo step, with the wires they leave hanging, as the canvas does: a part's wires back to the nearest junction or other pin, and a wire's whole run up to one. Numbers after # shift once something is deleted, so read the circuit again before using them.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1296,8 +1297,11 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
       );
 
       editMatching(host, circuit, (live) => {
-        live.elements = live.elements.filter(
-          (_element, index) => !indexes.has(index),
+        live.elements = deleteWithWires(
+          live.elements,
+          new Set(
+            live.elements.filter((_element, index) => indexes.has(index)),
+          ),
         );
       });
 

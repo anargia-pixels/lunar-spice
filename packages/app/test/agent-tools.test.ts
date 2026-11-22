@@ -155,6 +155,29 @@ describe("agent tools", () => {
     ]);
   });
 
+  test("delete a part with the wires to its pins, as the canvas does", async () => {
+    const host = testHost();
+
+    await divider(host);
+
+    const kinds = async () =>
+      (await call(host, "get_circuit", {})).connectors
+        .map(({ kind }: { kind: string }) => kind)
+        .sort();
+
+    const before = await kinds();
+
+    // R1's wire from V1 goes with it; R2's wire to V1 and the label stay.
+    await call(host, "delete_parts", { parts: ["R1"] });
+
+    const after = await kinds();
+
+    expect(before.filter((kind: string) => kind === "wire").length).toBe(
+      after.filter((kind: string) => kind === "wire").length + 1,
+    );
+    expect(after).toContain("label");
+  });
+
   test("delete parts and replace the circuit file", async () => {
     const host = testHost();
 

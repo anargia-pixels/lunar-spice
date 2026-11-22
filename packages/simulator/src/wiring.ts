@@ -303,3 +303,119 @@ export function mergeWires(elements: readonly CircuitElement[]) {
 
   return [...elements.filter((element) => !removed.has(element)), ...added];
 }
+
+/** The wires with an end at each point, and how many other posts each point has. */
+function connectionsOf(elements: readonly CircuitElement[]) {
+  const wireEnds = new Map<string, Set<CircuitElement>>();
+  const otherPosts = new Map<string, number>();
+
+  for (const element of elements) {
+    if (isWire(element)) {
+      for (const end of [element.start, element.end]) {
+        const key = pointKey(end);
+        const wires = wireEnds.get(key) ?? new Set();
+
+        wires.add(element);
+        wireEnds.set(key, wires);
+      }
+    } else {
+      for (const post of element.posts()) {
+        const key = pointKey(post);
+
+        otherPosts.set(key, (otherPosts.get(key) ?? 0) + 1);
+      }
+    }
+  }
+
+  return { wireEnds, otherPosts };
+}
+
+/** The end of `wire` that is not `point`; its end when both are there. */
+function otherEnd(wire: CircuitElement, point: Point) {
+  return pointKey(wire.start) === pointKey(point) ? wire.end : wire.start;
+}
+
+/**
+ * The wire `wire` is part of, as Multisim counts one: it and every wire that continues
+ * it through a point where just two wire ends meet, so it runs from one pin, junction or
+ * loose end to the next. In file order; a lone wire for anything else.
+ */
+export function wireRun(
+  elements: readonly CircuitElement[],
+  wire: CircuitElement,
+) {
+  if (!isWire(wire)) {
+    return [wire];
+  }
+
+  const { wireEnds, otherPosts } = connectionsOf(elements);
+  const run = new Set([wire]);
+  const points = [wire.start, wire.end];
+
+  for (let point = points.pop(); point; point = points.pop()) {
+    const key = pointKey(point);
+    const wires = [...(wireEnds.get(key) ?? [])];
+
+    const isPassThrough =
+      wires.length === 2 && !otherPosts.has(key) && !isOnWire(elements, point);
+
+    const next = isPassThrough
+      ? wires.find((other) => !run.has(other))
+      : undefined;
+
+    if (next) {
+      run.add(next);
+      points.push(otherEnd(next, point));
+    }
+  }
+
+  return elements.filter((element) => run.has(element));
+}
+
+/**
+ * Returns `elements` without `deleted` and without the wires deleting them leaves
+ * hanging, as Multisim deletes a part's wires with it: a wire left with a loose end
+ * where a deleted element had a post goes, and so on along its run, up to the first pin
+ * or junction. A junction left with two wires becomes a bend in one wire; wires that
+ * still join other parts stay.
+ */
+export function deleteWithWires(
+  elements: readonly CircuitElement[],
+  deleted: ReadonlySet<CircuitElement>,
+) {
+  const removed = new Set(deleted);
+
+  const { wireEnds, otherPosts } = connectionsOf(
+    elements.filter((element) => !removed.has(element)),
+  );
+
+  const points = [...deleted].flatMap((element) =>
+    isWire(element) ? [element.start, element.end] : element.posts(),
+  );
+
+  for (let point = points.pop(); point; point = points.pop()) {
+    const key = pointKey(point);
+    const [wire, ...others] = wireEnds.get(key) ?? [];
+
+    const isLoose =
+      wire !== undefined &&
+      others.length === 0 &&
+      !otherPosts.has(key) &&
+      !isOnWire(
+        elements.filter((element) => !removed.has(element)),
+        point,
+      );
+
+    if (wire && isLoose) {
+      removed.add(wire);
+
+      for (const end of [wire.start, wire.end]) {
+        wireEnds.get(pointKey(end))?.delete(wire);
+      }
+
+      points.push(otherEnd(wire, point));
+    }
+  }
+
+  return elements.filter((element) => !removed.has(element));
+}

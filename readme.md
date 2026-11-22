@@ -52,7 +52,12 @@ drawn over another, or wires that meet in a straight line with nothing else at t
 become one wire. Ends that join nothing are ringed and counted under the canvas; click the
 count to bring them into view and flag them. Moving a part keeps it connected: its wires
 stretch along, with a right-angle bend where they would run at a slant, and a part that
-touched it directly gets a new wire.
+touched it directly gets a new wire. Rotating or flipping a part keeps its wires on its
+pins too: each wire is laid again on the grid, around posts, wires and parts rather than
+over them. As in Multisim, a click on a wire selects all of it, from one pin or junction
+to the next, and dragging it moves the stretch you pressed. Deleting a wire deletes all of
+it, and deleting a part deletes its wires back to the nearest junction or other pin; a
+junction left with two wires becomes one wire.
 
 Each part's name and value can be dragged to a clearer spot, and its name changed in its
 properties (`R1` can become `Rload`). Schematic text uses Poppins or JetBrains Mono, from

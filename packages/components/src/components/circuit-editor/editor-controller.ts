@@ -33,9 +33,11 @@ import {
   withEnclosed,
 } from "@lunar-spice/simulator/layout";
 import {
+  deleteWithWires,
   isOnWire,
   joinPostsToWires,
   mergeWires,
+  wireRun,
 } from "@lunar-spice/simulator/wiring";
 
 import { canvasPalette, watchPalette } from "../../lib/canvas-palette";
@@ -773,7 +775,7 @@ export class EditorController {
     const element = this.elementAt(this.toWorld(clientX, clientY));
 
     if (!element || !this.selection.has(element)) {
-      this.select(element ? [element] : []);
+      this.select(element ? wireRun(this.circuit.elements, element) : []);
     }
 
     return element;
@@ -1014,12 +1016,15 @@ export class EditorController {
     this.commit();
   }
 
+  /**
+   * Deletes the selection with the wires it leaves hanging, as Multisim does: a part's
+   * wires back to the nearest junction or other pin, and a wire's whole run.
+   */
   deleteSelection() {
     this.editSelected((elements) => {
-      const deleted = new Set(elements);
-
-      this.circuit.elements = this.circuit.elements.filter(
-        (element) => !deleted.has(element),
+      this.circuit.elements = deleteWithWires(
+        this.circuit.elements,
+        new Set(elements),
       );
       this.selection.clear();
     });
@@ -1036,15 +1041,19 @@ export class EditorController {
         element.translate(dx, dy);
       }
 
-      this.moveAttachedWires(wires, dx, dy);
+      this.placeAttachedWires(wires.moveBy(dx, dy));
       this.removeCollapsedWires(wires);
     });
   }
 
-  /** Moves the wires attached to the selection, adding and removing their bends. */
-  private moveAttachedWires(wires: AttachedWires, dx: number, dy: number) {
-    const { added, removed } = wires.moveBy(dx, dy);
-
+  /** Puts the wires attached to the selection in the circuit, with their new bends. */
+  private placeAttachedWires({
+    added,
+    removed,
+  }: {
+    added: readonly CircuitElement[];
+    removed: readonly CircuitElement[];
+  }) {
     if (added.length > 0 || removed.length > 0) {
       this.circuit.elements = [
         ...this.circuit.elements.filter(
@@ -1078,7 +1087,10 @@ export class EditorController {
     this.transformSelection((elements) => flipElements(elements, axis));
   }
 
-  /** Applies `transform` to the part being placed, or else to the selection. */
+  /**
+   * Applies `transform` to the part being placed, or else to the selection, whose wires
+   * follow their posts as they do in a move.
+   */
   private transformSelection(transform: (elements: CircuitElement[]) => void) {
     if (this.ghost) {
       transform([this.ghost]);
@@ -1087,7 +1099,17 @@ export class EditorController {
       return;
     }
 
-    this.editSelected(transform);
+    this.editSelected((elements) => {
+      const wires = new AttachedWires(
+        this.circuit.elements,
+        new Set(elements),
+        true,
+      );
+
+      transform(elements);
+      this.placeAttachedWires(wires.followPosts());
+      this.removeCollapsedWires(wires);
+    });
   }
 
   duplicateSelection() {
@@ -1357,19 +1379,55 @@ export class EditorController {
     return null;
   }
 
-  /** The selected wire's end under `point`, for dragging it; parts keep their size. */
+  /**
+   * The end under `point` of what is selected, for dragging it: either end of a lone
+   * wire or group, or an end where a wire selected whole stops. Parts keep their size.
+   */
   private endAt(point: Point) {
-    const [element] = this.selection.size === 1 ? this.selection : [];
+    const selected = this.selectedElements;
+    const [first] = selected;
 
-    if (!element?.isStretchable() && !element?.isEnclosure()) {
+    if (!first) {
       return null;
     }
 
-    for (const isStart of [true, false]) {
-      const end = isStart ? element.start : element.end;
+    const isLone =
+      selected.length === 1 && (first.isStretchable() || first.isEnclosure());
 
-      if (Math.hypot(end.x - point.x, end.y - point.y) <= PICK_DISTANCE) {
-        return { element, isStart };
+    const run = isLone
+      ? selected
+      : isWire(first)
+        ? wireRun(this.circuit.elements, first)
+        : [];
+
+    if (
+      run.length !== selected.length ||
+      !run.every((element) => this.selection.has(element))
+    ) {
+      return null;
+    }
+
+    // Where two of its wires meet is a bend, which a drag of the wire moves instead.
+    const ends = new Map<string, number>();
+
+    for (const element of run) {
+      for (const end of [element.start, element.end]) {
+        ends.set(pointKey(end), (ends.get(pointKey(end)) ?? 0) + 1);
+      }
+    }
+
+    for (const element of run) {
+      for (const isStart of [true, false]) {
+        const end = isStart ? element.start : element.end;
+
+        const isStop = isLone || ends.get(pointKey(end)) === 1;
+
+        if (
+          isStop &&
+          Math.hypot(end.x - point.x, end.y - point.y) <= PICK_DISTANCE
+        ) {
+          return { element, isStart };
+        }
       }
     }
 
@@ -1506,19 +1564,34 @@ export class EditorController {
       return { kind: "press", element };
     }
 
-    // Shift toggles the element in the selection; without Shift, an unselected
-    // element becomes the selection. Then a drag moves the selection.
+    // A wire is picked whole, from one pin or junction to the next, as in Multisim.
+    // Shift toggles it in the selection; without Shift, an unselected one becomes the
+    // selection. Then a drag moves the selection, or only the pressed stretch of a wire
+    // picked on its own, which the rest of the wire bends to follow.
+    const picked = wireRun(this.circuit.elements, element);
+
     if (isShift) {
-      if (!this.selection.delete(element)) {
-        this.selection.add(element);
+      const isSelected = this.selection.has(element);
+
+      for (const each of picked) {
+        if (isSelected) {
+          this.selection.delete(each);
+        } else {
+          this.selection.add(each);
+        }
       }
 
       this.emitSelection();
     } else if (!this.selection.has(element)) {
-      this.select([element]);
+      this.select(picked);
     }
 
-    const moved = new Set(this.affectedElements);
+    const isWireAlone =
+      isWire(element) &&
+      picked.length === this.selection.size &&
+      picked.every((each) => this.selection.has(each));
+
+    const moved = new Set(isWireAlone ? [element] : this.affectedElements);
 
     return {
       kind: "move",
@@ -1591,10 +1664,8 @@ export class EditorController {
             element.translate(dx, dy);
           }
 
-          this.moveAttachedWires(
-            drag.wires,
-            at.x - drag.origin.x,
-            at.y - drag.origin.y,
+          this.placeAttachedWires(
+            drag.wires.moveBy(at.x - drag.origin.x, at.y - drag.origin.y),
           );
           drag.applied = at;
           drag.hasMoved = true;
