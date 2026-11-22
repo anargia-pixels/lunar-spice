@@ -13,6 +13,16 @@ const CURRENT_RELTOL = 1e-3;
 /** SPICE's ABSTOL for a nonlinear model's current: 1 pA. */
 const CURRENT_ABSTOL = 1e-12;
 
+/** SPICE's RELTOL and VNTOL for a node voltage: 0.1 % and 1 µV. */
+const VOLTAGE_RELTOL = 1e-3;
+
+const VOLTAGE_ABSTOL = 1e-6;
+
+/** True while `error` is more than SPICE's tolerance for a node at `voltage`. */
+export function missesVoltage(error: number, voltage: number) {
+  return Math.abs(error) > VOLTAGE_RELTOL * Math.abs(voltage) + VOLTAGE_ABSTOL;
+}
+
 /**
  * True while a nonlinear model has not converged: the current its last linearization
  * predicts at the new solution misses the model's current there by more than SPICE's

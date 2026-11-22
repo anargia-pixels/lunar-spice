@@ -17,6 +17,7 @@ import {
   type AcSystem,
   type Handle,
   mispredicts,
+  missesVoltage,
   type MnaSystem,
 } from "../mna-system";
 import { ParamSet, type ParamSpec, type Preset } from "../params";
@@ -223,6 +224,17 @@ const OP_AMP_PRESETS: readonly Preset[] = [
 ];
 
 /**
+ * Below this argument, tanh's series to the cubic term is exact to 1e-13: an op-amp
+ * under negative feedback keeps its stage there, and the series is far cheaper.
+ */
+const TANH_SERIES_LIMIT = 1e-3;
+
+/** Returns tanh(`x`). */
+function stageTanh(x: number) {
+  return Math.abs(x) < TANH_SERIES_LIMIT ? x * (1 - (x * x) / 3) : Math.tanh(x);
+}
+
+/**
  * Returns how long something `distance` short of a breakpoint takes to reach it moving
  * toward it at `speed`: 0 once past it, Infinity when it is not getting closer.
  */
@@ -265,6 +277,12 @@ const MAX_FLIP_BACKOFF = 1024;
  * reaches it: its current is then within 0.5% of the largest.
  */
 const SATURATED_STAGE = 3;
+
+/**
+ * How far inside its knee the input stage is linear, in the same units: its current is
+ * then within 0.4% of its slope times the difference.
+ */
+const LINEAR_STAGE = 0.1;
 
 /**
  * Ratio of the swing limiter's pull to the input stage's largest current. The node gives
@@ -312,6 +330,11 @@ export class OpAmp extends CircuitElement {
   private settledLimit = 0;
   /** Seconds since a limit let go of the pole node, while the stage still snaps over. */
   private snappingFor = Number.POSITIVE_INFINITY;
+  /**
+   * How far the input difference moved over the latest step while the stage snaps over;
+   * NaN in the step it lets go in.
+   */
+  private snapChange = Number.NaN;
   /**
    * The limit the stage flips to in this step, skipping its snap and slew: 1 high, -1
    * low, 0 while it takes them in short steps. A held stage flips in the step its release
@@ -652,14 +675,23 @@ export class OpAmp extends CircuitElement {
 
     // A step's first stamp is at the voltages the one before it ended on.
     if (difference !== this.stageInput) {
-      const ratio = Math.tanh((gain * difference) / maxCurrent);
+      const ratio = stageTanh((gain * difference) / maxCurrent);
       const current = maxCurrent * ratio;
 
       const predicted =
         this.lastStageCurrent +
         this.lastStageConductance * (difference - this.lastInputDifference);
 
-      if (mispredicts(current, predicted)) {
+      // A limiter that holds the pole node takes up what the stage's current misses:
+      // only the node's voltage counts then, and it moves by the miss over its pull.
+      if (
+        mispredicts(current, predicted) &&
+        (this.limit === 0 ||
+          missesVoltage(
+            (current - predicted) / this.stage.stiffness,
+            poleVoltage,
+          ))
+      ) {
         system.converged = false;
       }
 
@@ -786,8 +818,11 @@ export class OpAmp extends CircuitElement {
 
     // Once a limit lets go, the stage snaps over until its current saturates, or, with
     // negative feedback, settles within a few time constants.
+    let isSettling = false;
+
     if (this.settledLimit !== 0 && this.limit === 0) {
       this.snappingFor = 0;
+      this.snapChange = Number.NaN;
       this.flipTo = 0;
 
       if (this.flipSkips > 0) {
@@ -802,10 +837,21 @@ export class OpAmp extends CircuitElement {
 
       this.flipTo = 0;
       this.snappingFor += system.timeStep;
+
+      // A stage that regenerates speeds up step by step until it saturates. One that
+      // stays linear and no faster than the step before is not snapping over: negative
+      // feedback holds it, and the input moves it no faster than the rest of the circuit.
+      const change = Math.abs(difference - this.settledDifference);
+
+      isSettling =
+        change <= this.snapChange &&
+        Math.abs(gain * difference) < LINEAR_STAGE * maxCurrent;
+      this.snapChange = change;
     }
 
     if (
       this.limit !== 0 ||
+      isSettling ||
       Math.abs(gain * difference) >= SATURATED_STAGE * maxCurrent ||
       this.snappingFor >= SNAPPING_STEPS * breakpointStep
     ) {
@@ -1066,6 +1112,7 @@ export class OpAmp extends CircuitElement {
     this.hasSettled = false;
     this.settledLimit = 0;
     this.snappingFor = Number.POSITIVE_INFINITY;
+    this.snapChange = Number.NaN;
     this.flipTo = 0;
     this.flipSkips = 0;
     this.flipBackoff = 1;

@@ -46,8 +46,30 @@ function criticalVoltage(saturationCurrent: number, thermal: number) {
 }
 
 /**
+ * How far below its critical voltage, in thermal voltages, a junction's falling Newton
+ * step is still worked out from its current: e^-16 of the current at the critical voltage
+ * is a few nanoamps for any part, too little to matter next to the rest of the circuit.
+ */
+const FALLING_RANGE = 16;
+
+/**
+ * The shortest falling step, in thermal voltages, worked out from the current. Shorter
+ * ones are Newton's own, so it still converges on the junction's solution.
+ */
+const FALLING_MIN_STEP = 0.1;
+
+/**
+ * The smallest share of a junction's current a falling Newton step aims for: a junction
+ * the linearization would turn around is about to switch off.
+ */
+const FALLING_SHARE = 0.01;
+
+/**
  * Damps a junction voltage's Newton step the way SPICE's pnjlim does, so the
- * exponential does not overshoot.
+ * exponential does not overshoot. A conducting junction's falling step is worked out
+ * from its current the same way: from above, the tangent of an exponential falls short
+ * by up to the whole step, so Newton would crawl down about one thermal voltage per
+ * iteration where this lands where the linearized current asks.
  */
 function limitJunction(
   next: number,
@@ -63,6 +85,18 @@ function limitJunction(
     }
 
     return thermal * Math.log(next / thermal);
+  }
+
+  const fall = (previous - next) / thermal;
+
+  if (
+    fall > FALLING_MIN_STEP &&
+    previous > critical - FALLING_RANGE * thermal
+  ) {
+    // A linearized current at or below zero means the junction switches off.
+    return fall < 1
+      ? previous + thermal * Math.log(1 - fall)
+      : Math.min(next, previous + thermal * Math.log(FALLING_SHARE));
   }
 
   return next;
