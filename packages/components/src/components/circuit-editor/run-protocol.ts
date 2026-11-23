@@ -109,6 +109,8 @@ export type FromWorker = {
   /** The load this snapshot is of; the editor drops element state from older ones. */
   generation: number;
   time: number;
+  /** True when the run loop recently could not keep the selected speed. */
+  isBehind: boolean;
   error: string | null;
   /** Ids of the elements behind `error`. */
   faults: readonly number[];

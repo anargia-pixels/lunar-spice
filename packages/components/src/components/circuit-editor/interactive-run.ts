@@ -107,6 +107,8 @@ export class InteractiveRun {
   private isRunning = INITIAL_STATUS.isRunning;
   private time = 0;
   private error: string | null = null;
+  /** Whether the worker last reported running behind the selected speed. */
+  private isBehind = false;
   private faultSet = new Set<CircuitElement>();
   private lastStatus: SimulationStatus | null = null;
   private lastStatusTime = 0;
@@ -193,6 +195,7 @@ export class InteractiveRun {
   rebuild(circuit: Circuit, isRestart = false) {
     this.circuit = circuit;
     this.error = null;
+    this.isBehind = false;
     this.faultSet = new Set();
     this.netlist = buildNetlist(circuit.elements, "transient");
     this.voltages = new Float64Array(this.netlist.nodeCount);
@@ -346,6 +349,7 @@ export class InteractiveRun {
 
     this.time = snapshot.time;
     this.voltages = snapshot.voltages;
+    this.isBehind = snapshot.isBehind;
     this.hasNewSnapshot = true;
 
     for (const [id, patch] of snapshot.states) {
@@ -544,6 +548,7 @@ export class InteractiveRun {
     return {
       isRunning: this.isStepping,
       time: this.time,
+      isBehind: this.isStepping && this.isBehind,
       error:
         this.error && this.faultSet.size > 0
           ? `${this.error} The parts involved are marked on the schematic.`

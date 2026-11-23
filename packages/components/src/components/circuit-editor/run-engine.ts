@@ -47,6 +47,12 @@ const STEPS_PER_CLOCK_CHECK = 8;
  */
 const MAX_CATCH_UP_MS = 100;
 
+/**
+ * How long a slice that ran out of budget keeps the behind warning lit. The budget
+ * check is per slice, so a single slow slice says nothing; a stretch of them does.
+ */
+const BEHIND_HOLD_MS = 500;
+
 /** One element the engine steps, with a copy read fresh from its file line. */
 type RunElement = {
   element: CircuitElement;
@@ -88,6 +94,8 @@ export class RunEngine {
   private lastRun: number | null = null;
   /** The part of a step carried to the next call. */
   private stepRemainder = 0;
+  /** When the behind warning expires, in milliseconds; 0 while keeping up. */
+  private behindUntil = 0;
   private scopes: Scope[] = [];
   private byId = new Map<number, CircuitElement>();
   private recorders: OscilloscopeRecorder[] = [];
@@ -185,6 +193,7 @@ export class RunEngine {
 
     this.error = null;
     this.faults = [];
+    this.behindUntil = 0;
     this.simulation = new Simulation(
       this.elements.map(({ element }) => element),
       "transient",
@@ -297,6 +306,7 @@ export class RunEngine {
 
     if (!simulation || !settings || !this.isStepping) {
       this.lastRun = null;
+      this.behindUntil = 0;
 
       return false;
     }
@@ -344,6 +354,10 @@ export class RunEngine {
       }
     }
 
+    if (isBehind) {
+      this.behindUntil = now + BEHIND_HOLD_MS;
+    }
+
     this.time = simulation.time;
 
     return isBehind;
@@ -376,6 +390,7 @@ export class RunEngine {
       kind: "snapshot",
       generation: this.generation,
       time: this.time,
+      isBehind: performance.now() < this.behindUntil,
       error: this.error,
       faults: this.faults.map(({ id }) => id),
       voltages: simulation

@@ -3,6 +3,8 @@ export type SimulationStatus = {
   isRunning: boolean;
   /** Simulated time in seconds. */
   time: number;
+  /** True while the circuit cannot keep the selected speed; the simulation runs slow. */
+  isBehind: boolean;
   error: string | null;
   /** True when the circuit has a microphone or a speaker. */
   usesSound: boolean;
@@ -14,6 +16,7 @@ export type SimulationStatus = {
 export const INITIAL_STATUS: SimulationStatus = {
   isRunning: false,
   time: 0,
+  isBehind: false,
   error: null,
   usesSound: false,
   audioError: null,

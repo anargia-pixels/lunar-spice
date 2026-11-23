@@ -102,6 +102,16 @@ function speedLabel(multiplier: number) {
   return `1/${Number((1 / multiplier).toPrecision(3))}×`;
 }
 
+/**
+ * True in Firefox and other SpiderMonkey browsers, whose JIT leaves the solver's
+ * largest generated function uncompiled and so simulates a few times slower.
+ */
+function isFirefox() {
+  return (
+    typeof navigator !== "undefined" && /firefox/i.test(navigator.userAgent)
+  );
+}
+
 /** True for 1/1000, 1/100, …, 1000: the stops the slider marks with taller ticks. */
 function isPowerOfTen(step: number) {
   const exponent = Math.log10(step);
@@ -381,6 +391,25 @@ function InteractiveSection() {
             Math.abs(multiplier - 1) > 1e-6 &&
             " Microphones and speakers only work at 1×."}
         </FieldDescription>
+        {isFirefox() && (
+          <Alert>
+            <AlertDescription>
+              Firefox runs the interactive simulation 2–3× slower than
+              Chromium-based browsers, so complex circuits can fall behind real
+              time and stretch audio. A Chromium-based browser or the desktop
+              app keeps real time.
+            </AlertDescription>
+          </Alert>
+        )}
+        {status.isBehind && (
+          <Alert variant="destructive">
+            <AlertDescription>
+              The circuit is too heavy to keep the selected speed right now: the
+              simulation runs slower and audio stretches. Fewer scopes or a
+              simpler circuit keeps up.
+            </AlertDescription>
+          </Alert>
+        )}
       </Field>
       {status.audioError && (
         <Alert variant="destructive">
