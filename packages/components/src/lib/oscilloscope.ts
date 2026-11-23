@@ -753,10 +753,11 @@ const NO_SIGNAL = 1e-6;
 
 /**
  * The front panel autoset picks from what each channel's meter has read: channels with
- * a signal on and scaled to fill six divisions about the middle, those without off, the
- * trigger on the middle of the first repeating one, and two and a half of its cycles on
- * the screen. A GND-coupled channel, which shows no signal, stays as it is. Null while no
- * channel has a signal.
+ * a signal on and scaled to fill six divisions about the middle — coarser when a DC
+ * offset would push the trace off screen, those without off, the trigger on the middle
+ * of the first repeating one, and two and a half of its cycles on the screen. A
+ * GND-coupled channel, which shows no signal, stays as it is. Null while no channel
+ * has a signal.
  */
 export function autoset(
   settings: OscilloscopeSettings,
@@ -787,11 +788,14 @@ export function autoset(
 
     const middle = (reading.minimum + reading.maximum) / 2;
 
+    // The scale must fill six divisions with the swing and still place the
+    // offset inside the position knob's travel, or the trace runs off screen.
     const voltsPerDivision = smallestAtLeast(
       VOLTS_PER_DIVISION,
-      reading.peakToPeak > NO_SIGNAL
-        ? reading.peakToPeak / AUTOSET_DIVISIONS
-        : Math.abs(middle) / (VERTICAL_DIVISIONS / 2 - 1),
+      Math.max(
+        reading.peakToPeak / AUTOSET_DIVISIONS,
+        Math.abs(middle) / (VERTICAL_DIVISIONS / 2 - 1),
+      ),
     );
 
     const position = Math.round((-middle / voltsPerDivision) * 10) / 10;

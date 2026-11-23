@@ -228,6 +228,33 @@ describe("oscilloscope recorder", () => {
     expect(settings?.secondsPerDivision).toBe(5e-4);
   });
 
+  test("autoset keeps a DC offset on screen", () => {
+    // 0.2 V peak-to-peak riding 6 V: the swing alone asks for 50 mV/div, but
+    // that pins the position knob at −4 and pushes the trace off screen. The
+    // offset needs its three divisions, so the scale is 2 V/div, a division
+    // each side of the knob's travel.
+    const recorder = new OscilloscopeRecorder(1, settingsWith(), TIME_STEP);
+    const oscilloscope = new Oscilloscope(0, 0, 0, 0);
+
+    for (let step = 1; step <= 10_000; step += 1) {
+      const time = step * TIME_STEP;
+
+      oscilloscope.volts = [
+        6 + 0.1 * Math.sin(2 * Math.PI * 1000 * time),
+        0,
+        0,
+        0,
+        0,
+      ];
+      recorder.record(oscilloscope, time);
+    }
+
+    const channel = autoset(settingsWith(), recorder.meters)?.channels[0];
+
+    expect(channel?.voltsPerDivision).toBe(2);
+    expect(channel?.position).toBe(-3);
+  });
+
   test("records a wired oscilloscope in the run engine", () => {
     // 5 V through 1 kΩ charging 1 µF, CH1 on the capacitor and COM on ground.
     const lines = [

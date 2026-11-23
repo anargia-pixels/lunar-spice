@@ -523,7 +523,7 @@ function ScopeCard({
   return (
     <section
       aria-label={scope.title}
-      className="bg-card flex h-full w-96 shrink-0 flex-col gap-1 rounded-lg border p-2"
+      className="bg-card flex h-96 w-96 shrink-0 flex-col gap-1 rounded-lg border p-2"
     >
       <header className="flex items-center gap-1">
         <h3 className="mr-auto min-w-0 truncate text-xs font-medium">
@@ -599,7 +599,7 @@ export function ScopeView({
   }
 
   return (
-    <div className="flex h-full min-h-0 gap-3 overflow-x-auto p-3">
+    <div className="flex h-full min-h-0 flex-wrap content-start gap-3 overflow-auto p-3">
       {scopes.map((scope) => (
         <ScopeCard
           key={scope.elementId}
