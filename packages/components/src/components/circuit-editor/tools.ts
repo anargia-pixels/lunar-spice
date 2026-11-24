@@ -365,6 +365,15 @@ const TOOL_DEFINITIONS = [
     isPrimary: false,
   },
   {
+    id: "audio-amplifier",
+    label: "LM386 audio amplifier",
+    group: "Integrated circuits",
+    kind: "audio-amplifier",
+    keys: [key("x", true)],
+    size: { dx: 0, dy: 0 },
+    isPrimary: false,
+  },
+  {
     id: "oscilloscope",
     label: "Oscilloscope",
     group: "General",

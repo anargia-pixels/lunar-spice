@@ -6,6 +6,7 @@ import {
   TokenReader,
 } from "./element";
 import { Microphone, Speaker } from "./elements/audio";
+import { AudioAmplifier } from "./elements/audio-amplifier";
 import {
   Ground,
   NetLabel,
@@ -162,6 +163,7 @@ const ELEMENT_CLASSES: Record<ElementKind, ElementClass> = {
   regulator: FixedRegulator,
   "adjustable-regulator": AdjustableRegulator,
   timer: Timer555,
+  "audio-amplifier": AudioAmplifier,
   microphone: Microphone,
   speaker: Speaker,
   oscilloscope: Oscilloscope,

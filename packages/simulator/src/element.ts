@@ -31,6 +31,7 @@ export type ElementKind =
   | "regulator"
   | "adjustable-regulator"
   | "timer"
+  | "audio-amplifier"
   | "microphone"
   | "speaker"
   | "oscilloscope"

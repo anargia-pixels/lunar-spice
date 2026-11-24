@@ -176,6 +176,12 @@ const GLYPHS: Record<ToolId | "more", ReactNode> = {
       <path d="M3 7h3M3 12h3M3 17h3M18 7h3M18 12h3M18 17h3" />
     </>
   ),
+  "audio-amplifier": (
+    <>
+      <path d="M6 4v16l13-8Z" />
+      <path d="M2 9h4M2 15h4M19 12h3M10 3V6.5M10 17.5V21" />
+    </>
+  ),
   voltmeter: (
     <>
       <circle cx="12" cy="12" r="7" />

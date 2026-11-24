@@ -18,6 +18,7 @@ import {
   rangeError,
   type ValueRange,
 } from "@lunar-spice/simulator/element";
+import { AMPLIFIER_PINS } from "@lunar-spice/simulator/elements/audio-amplifier";
 import { NetLabel } from "@lunar-spice/simulator/elements/connectors";
 import { TIMER_PINS } from "@lunar-spice/simulator/elements/integrated-circuits";
 import { OSCILLOSCOPE_PINS } from "@lunar-spice/simulator/elements/oscilloscope";
@@ -194,6 +195,7 @@ const PIN_NAMES: Partial<Record<ElementKind, readonly string[]>> = {
   regulator: ["IN", "OUT", "GND"],
   "adjustable-regulator": ["IN", "OUT", "ADJ"],
   timer: TIMER_PINS.map(({ name }) => name),
+  "audio-amplifier": AMPLIFIER_PINS.map(({ name }) => name),
   oscilloscope: OSCILLOSCOPE_PINS.map(({ name }) => name),
   microphone: ["+", "-"],
   voltmeter: ["+", "-"],

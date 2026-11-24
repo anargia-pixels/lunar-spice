@@ -3,6 +3,10 @@ import type {
   ElementKind,
 } from "@lunar-spice/simulator/element";
 import {
+  AMPLIFIER_PINS,
+  AMPLIFIER_SIZE,
+} from "@lunar-spice/simulator/elements/audio-amplifier";
+import {
   NetLabel,
   SpdtSwitch,
   Switch,
@@ -209,7 +213,9 @@ export class SchematicPainter {
     "schmitt-trigger": (element) => this.drawSchmittTrigger(element),
     regulator: (element) => this.drawRegulator(element),
     "adjustable-regulator": (element) => this.drawRegulator(element),
-    timer: (element) => this.drawTimer(element),
+    timer: (element) => this.drawChip(element, TIMER_PINS, TIMER_SIZE, "555"),
+    "audio-amplifier": (element) =>
+      this.drawChip(element, AMPLIFIER_PINS, AMPLIFIER_SIZE, "LM386"),
     oscilloscope: (element) => this.drawOscilloscope(element),
     group: (element) => this.drawGroup(element),
   };
@@ -1486,29 +1492,38 @@ export class SchematicPainter {
     this.sideLabel(element, interpolate(left, right, 0.5, -16 * side), 4);
   }
 
-  private drawTimer(element: CircuitElement) {
+  /**
+   * An IC drawn as a box `size` from its first point, such as the 555: `title` inside,
+   * and a lead from each pin's post to the box edge with the pin's name.
+   */
+  private drawChip(
+    element: CircuitElement,
+    pins: readonly { name: string; x: number; y: number }[],
+    size: { width: number; height: number },
+    title: string,
+  ) {
     const { context } = this;
     const x = element.x1;
     const y = element.y1;
 
     context.strokeStyle = this.outlineColor();
     context.beginPath();
-    context.roundRect(x, y, TIMER_SIZE.width, TIMER_SIZE.height, 3);
+    context.roundRect(x, y, size.width, size.height, 3);
     context.stroke();
-    this.text("555", { x: x + TIMER_SIZE.width / 2, y: y + 38 }, "center", 13);
+    this.text(title, { x: x + size.width / 2, y: y + 38 }, "center", 13);
 
     const posts = element.posts();
 
-    TIMER_PINS.forEach((pin, index) => {
+    pins.forEach((pin, index) => {
       const post = posts[index] ?? { x: x + pin.x, y: y + pin.y };
 
       const edge = {
-        x: Math.min(Math.max(post.x, x), x + TIMER_SIZE.width),
-        y: Math.min(Math.max(post.y, y), y + TIMER_SIZE.height),
+        x: Math.min(Math.max(post.x, x), x + size.width),
+        y: Math.min(Math.max(post.y, y), y + size.height),
       };
 
       // Side pins align their labels to their edge, so DIS clears VCC above it.
-      const isSide = post.x < x || post.x > x + TIMER_SIZE.width;
+      const isSide = post.x < x || post.x > x + size.width;
 
       const align: CanvasTextAlign = !isSide
         ? "center"
@@ -1532,7 +1547,7 @@ export class SchematicPainter {
         this.partLabel(
           element,
           content,
-          { x: x + TIMER_SIZE.width / 2, y: y + 56 + line * 11 },
+          { x: x + size.width / 2, y: y + 56 + line * 11 },
           "center",
           9,
         ),
