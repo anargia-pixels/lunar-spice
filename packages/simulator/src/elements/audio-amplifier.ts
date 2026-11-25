@@ -1,7 +1,12 @@
 import { CompanionCapacitor } from "../companion";
 import { CircuitElement, type EditField, type TokenReader } from "../element";
 import { type Point, snapToGrid } from "../geometry";
-import { type AcSystem, mispredicts, type MnaSystem } from "../mna-system";
+import {
+  type AcSystem,
+  type Handle,
+  mispredicts,
+  type MnaSystem,
+} from "../mna-system";
 import { ParamSet, type ParamSpec, type Preset } from "../params";
 import { formatSi } from "../units";
 
@@ -190,26 +195,49 @@ function sourcedPart(current: number) {
 }
 
 /**
- * Stamps a linearized current `value` that leaves node `from` and enters node `to`. Each
- * slope is the current's derivative in the voltage of its node, now at `voltage`.
+ * Where each Newton iteration stamps: the right-hand side rows of the pole node, VS, GND
+ * and OUT, and the matrix entries their currents reach, named row then column.
  */
-function stampLinearized(
-  system: MnaSystem,
-  from: number,
-  to: number,
-  value: number,
-  slopes: readonly { node: number; voltage: number; slope: number }[],
-) {
-  let constant = value;
+type IteratedHandles = {
+  pole: Handle;
+  supply: Handle;
+  ground: Handle;
+  output: Handle;
+  poleFromPole: Handle;
+  poleFromSupply: Handle;
+  poleFromGround: Handle;
+  groundFromPole: Handle;
+  groundFromSupply: Handle;
+  groundFromGround: Handle;
+  groundFromOutput: Handle;
+  supplyFromPole: Handle;
+  supplyFromSupply: Handle;
+  supplyFromGround: Handle;
+  supplyFromOutput: Handle;
+  outputFromPole: Handle;
+  outputFromOutput: Handle;
+};
 
-  for (const { node, voltage, slope } of slopes) {
-    system.stampMatrix(from, node, slope);
-    system.stampMatrix(to, node, -slope);
-    constant -= slope * voltage;
-  }
-
-  system.stampCurrentSource(from, to, constant);
-}
+/** The handles before the first stamp, which point nowhere yet. */
+const UNSTAMPED: IteratedHandles = {
+  pole: 0,
+  supply: 0,
+  ground: 0,
+  output: 0,
+  poleFromPole: 0,
+  poleFromSupply: 0,
+  poleFromGround: 0,
+  groundFromPole: 0,
+  groundFromSupply: 0,
+  groundFromGround: 0,
+  groundFromOutput: 0,
+  supplyFromPole: 0,
+  supplyFromSupply: 0,
+  supplyFromGround: 0,
+  supplyFromOutput: 0,
+  outputFromPole: 0,
+  outputFromOutput: 0,
+};
 
 /**
  * An LM386 audio power amplifier, as a behavioral model of its datasheet schematic. Each
@@ -251,12 +279,15 @@ export class AudioAmplifier extends CircuitElement {
     idle: 0,
   };
 
+  /** Where each iteration stamps, as `stamp` last found it. */
+  private handles = UNSTAMPED;
+
   /**
    * The voltages the last stamp linearized at and the currents it found there, so the next
    * can tell how far off its prediction was; `isLinearized` is false before the first.
    */
   private isLinearized = false;
-  private last = {
+  private readonly last = {
     pole: 0,
     supply: 0,
     ground: 0,
@@ -392,6 +423,25 @@ export class AudioAmplifier extends CircuitElement {
           sourcedPart(QUIESCENT_SUPPLY / (2 * FEEDBACK_RESISTANCE)),
       ),
     };
+    this.handles = {
+      pole: system.rightSideRow(pole),
+      supply: system.rightSideRow(node(SUPPLY)),
+      ground: system.rightSideRow(ground),
+      output: system.rightSideRow(node(OUTPUT)),
+      poleFromPole: system.variableEntry(pole, pole),
+      poleFromSupply: system.variableEntry(pole, node(SUPPLY)),
+      poleFromGround: system.variableEntry(pole, ground),
+      groundFromPole: system.variableEntry(ground, pole),
+      groundFromSupply: system.variableEntry(ground, node(SUPPLY)),
+      groundFromGround: system.variableEntry(ground, ground),
+      groundFromOutput: system.variableEntry(ground, node(OUTPUT)),
+      supplyFromPole: system.variableEntry(node(SUPPLY), pole),
+      supplyFromSupply: system.variableEntry(node(SUPPLY), node(SUPPLY)),
+      supplyFromGround: system.variableEntry(node(SUPPLY), ground),
+      supplyFromOutput: system.variableEntry(node(SUPPLY), node(OUTPUT)),
+      outputFromPole: system.variableEntry(node(OUTPUT), pole),
+      outputFromOutput: system.variableEntry(node(OUTPUT), node(OUTPUT)),
+    };
     this.isLinearized = false;
   }
 
@@ -480,55 +530,98 @@ export class AudioAmplifier extends CircuitElement {
     }
 
     this.isLinearized = true;
-    this.last = {
-      pole,
-      supply,
-      ground,
-      drive,
-      clamp,
-      clampPole,
-      clampSupply,
-      clampGround,
-      output: current,
-      outputSlope: currentSlope,
-      sourced,
-      sourcedSlope,
-      quiescent,
-      quiescentSlope,
-    };
+    last.pole = pole;
+    last.supply = supply;
+    last.ground = ground;
+    last.drive = drive;
+    last.clamp = clamp;
+    last.clampPole = clampPole;
+    last.clampSupply = clampSupply;
+    last.clampGround = clampGround;
+    last.output = current;
+    last.outputSlope = currentSlope;
+    last.sourced = sourced;
+    last.sourcedSlope = sourcedSlope;
+    last.quiescent = quiescent;
+    last.quiescentSlope = quiescentSlope;
 
-    const node = (index: number) => this.node(index);
-
-    stampLinearized(system, node(POLE), node(GROUND), clamp, [
-      { node: node(POLE), voltage: pole, slope: clampPole },
-      { node: node(SUPPLY), voltage: supply, slope: clampSupply },
-      { node: node(GROUND), voltage: ground, slope: clampGround },
-    ]);
-    stampLinearized(system, node(SUPPLY), node(OUTPUT), sourced, [
-      { node: node(POLE), voltage: pole, slope: sourcedSlope },
-      { node: node(OUTPUT), voltage: output, slope: -sourcedSlope },
-    ]);
-
+    // Each current is linearized: its slopes in the matrix, the rest as a source on the
+    // right-hand side, from the pin it leaves to the pin it enters.
+    const { handles } = this;
     const sunkSlope = currentSlope - sourcedSlope;
 
-    stampLinearized(system, node(GROUND), node(OUTPUT), current - sourced, [
-      { node: node(POLE), voltage: pole, slope: sunkSlope },
-      { node: node(OUTPUT), voltage: output, slope: -sunkSlope },
-    ]);
-    stampLinearized(system, node(SUPPLY), node(GROUND), quiescent, [
-      { node: node(SUPPLY), voltage: supply, slope: quiescentSlope },
-      { node: node(GROUND), voltage: ground, slope: -quiescentSlope },
-    ]);
-
-    system.stampConductance(
-      node(POLE),
-      node(GROUND),
-      this.pole.extraConductance,
+    // The clamps' current leaves the pole node for GND.
+    system.addEntry(handles.poleFromPole, clampPole);
+    system.addEntry(handles.groundFromPole, -clampPole);
+    system.addEntry(handles.poleFromSupply, clampSupply);
+    system.addEntry(handles.groundFromSupply, -clampSupply);
+    system.addEntry(handles.poleFromGround, clampGround);
+    system.addEntry(handles.groundFromGround, -clampGround);
+    this.stampSource(
+      system,
+      handles.pole,
+      handles.ground,
+      clamp - clampPole * pole - clampSupply * supply - clampGround * ground,
     );
+
+    // What VS sources leaves VS for OUT.
+    system.addEntry(handles.supplyFromPole, sourcedSlope);
+    system.addEntry(handles.outputFromPole, -sourcedSlope);
+    system.addEntry(handles.supplyFromOutput, -sourcedSlope);
+    system.addEntry(handles.outputFromOutput, sourcedSlope);
+    this.stampSource(
+      system,
+      handles.supply,
+      handles.output,
+      sourced - sourcedSlope * pole + sourcedSlope * output,
+    );
+
+    // The rest of the output current leaves GND for OUT.
+    system.addEntry(handles.groundFromPole, sunkSlope);
+    system.addEntry(handles.outputFromPole, -sunkSlope);
+    system.addEntry(handles.groundFromOutput, -sunkSlope);
+    system.addEntry(handles.outputFromOutput, sunkSlope);
+    this.stampSource(
+      system,
+      handles.ground,
+      handles.output,
+      current - sourced - sunkSlope * pole + sunkSlope * output,
+    );
+
+    // The quiescent current leaves VS for GND.
+    system.addEntry(handles.supplyFromSupply, quiescentSlope);
+    system.addEntry(handles.groundFromSupply, -quiescentSlope);
+    system.addEntry(handles.supplyFromGround, -quiescentSlope);
+    system.addEntry(handles.groundFromGround, quiescentSlope);
+    this.stampSource(
+      system,
+      handles.supply,
+      handles.ground,
+      quiescent - quiescentSlope * supply + quiescentSlope * ground,
+    );
+
+    // Backward Euler's extra conductance for the pole capacitor.
+    const { extraConductance } = this.pole;
+
+    system.addEntry(handles.poleFromPole, extraConductance);
+    system.addEntry(handles.groundFromGround, extraConductance);
+    system.addEntry(handles.poleFromGround, -extraConductance);
+    system.addEntry(handles.groundFromPole, -extraConductance);
     this.pole.stampStep(system);
     this.outputCurrent = current;
     this.sourcedCurrent = sourced;
     this.quiescentCurrent = quiescent;
+  }
+
+  /** Adds a current `value` that leaves the row `from` and enters the row `to`. */
+  private stampSource(
+    system: MnaSystem,
+    from: Handle,
+    to: Handle,
+    value: number,
+  ) {
+    system.addRightSide(from, -value);
+    system.addRightSide(to, value);
   }
 
   override setBranchCurrent(index: number, current: number) {

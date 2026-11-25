@@ -36,8 +36,27 @@ type CompiledSolve = (
   inverses: Float64Array,
 ) => number;
 
-/** False once the platform has refused to compile code, as a content security policy does. */
-let canCompile = true;
+/**
+ * How many compiled solves are kept for reuse. Edits to a running circuit come back to
+ * the same few pivot orders, and each solve's code is tens of kilobytes.
+ */
+const MAX_SHARED_SOLVES = 32;
+
+/**
+ * False once the platform has refused to compile code, as a content security policy does,
+ * and from the start in SpiderMonkey, Firefox's engine. It waits for tens of thousands of
+ * calls before it optimizes a function this large and runs it about four times slower than
+ * the loops until then, so a run falls behind each time pivots are chosen again, and the
+ * shorter steps' solves never get there. `InternalError` is a global only it defines.
+ */
+let canCompile = !("InternalError" in globalThis);
+
+/**
+ * Compiled solves by their code, oldest first. Factorizations that choose the same pivots,
+ * as a simulation rebuilt after an edit or one going back to pivots it had before does,
+ * share one function, which the engine has already optimized.
+ */
+const sharedSolves = new Map<string, CompiledSolve>();
 
 /** Returns `terms` added up as a balanced tree, which a processor adds side by side. */
 function sumOf(terms: readonly string[]): string {
@@ -48,6 +67,52 @@ function sumOf(terms: readonly string[]): string {
   const middle = terms.length >> 1;
 
   return `(${sumOf(terms.slice(0, middle))} + ${sumOf(terms.slice(middle))})`;
+}
+
+/** Returns the compiled solve with `body` as its code, compiling it unless it is kept. */
+function sharedSolve(body: string): CompiledSolve | null {
+  const kept = sharedSolves.get(body);
+
+  if (kept) {
+    // Kept solves go oldest first, so the one used last moves to the end.
+    sharedSolves.delete(body);
+    sharedSolves.set(body, kept);
+
+    return kept;
+  }
+
+  let solve: CompiledSolve;
+
+  try {
+    // SAFETY: the code is a function of these seven arguments that returns a number,
+    // built by `LuMatrix.compile` from a factorization's own indices and no outside text.
+    solve = new Function(
+      "source",
+      "rhs",
+      "result",
+      "offset",
+      "restValues",
+      "values",
+      "inverses",
+      body,
+    ) as CompiledSolve;
+  } catch {
+    canCompile = false;
+
+    return null;
+  }
+
+  sharedSolves.set(body, solve);
+
+  if (sharedSolves.size > MAX_SHARED_SOLVES) {
+    const [oldest] = sharedSolves.keys();
+
+    if (oldest !== undefined) {
+      sharedSolves.delete(oldest);
+    }
+  }
+
+  return solve;
 }
 
 /** An entry's state in a `MatrixPattern`'s mask. */
@@ -395,24 +460,7 @@ export class LuMatrix {
     });
     code.push(`return ${sumOf(results)};`);
 
-    try {
-      // SAFETY: the code above is a function of these seven arguments that returns a
-      // number, built from this factorization's own indices and no outside text.
-      return new Function(
-        "source",
-        "rhs",
-        "result",
-        "offset",
-        "restValues",
-        "values",
-        "inverses",
-        code.join("\n"),
-      ) as CompiledSolve;
-    } catch {
-      canCompile = false;
-
-      return null;
-    }
+    return sharedSolve(code.join("\n"));
   }
 
   /**

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import {
   Circuit,
@@ -59,7 +59,19 @@ function capacitorVoltage(engine: RunEngine) {
   return element.voltageDifference();
 }
 
+/**
+ * Makes `performance.now` read `clock()` until the test ends, so it sets when a slice's
+ * budget runs out and how long the behind warning stays lit.
+ */
+function mockClock(clock: () => number) {
+  spyOn(performance, "now").mockImplementation(clock);
+}
+
 describe("run engine", () => {
+  afterEach(() => {
+    mock.restore();
+  });
+
   test("steps as a simulation of the same circuit does", () => {
     const engine = new RunEngine();
 
@@ -140,6 +152,59 @@ describe("run engine", () => {
 
     mergeState(resistor, patch);
     expect(Math.abs(resistor.current)).toBeCloseTo(0.005, 9);
+  });
+
+  test("leaves the steps a slice has no time for to the next", () => {
+    // The clock reads past every deadline, so each slice stops at its first look.
+    let clock = 0;
+
+    mockClock(() => clock + 1);
+
+    const engine = new RunEngine();
+
+    engine.load(1, loaded(RC_LINES), SETTINGS, true);
+    engine.setRunning(true);
+    engine.run(0, 0);
+
+    // 1 ms of real time is 1000 steps, of which a slice without budget takes few.
+    clock = 1;
+    expect(engine.run(1, 0)).toBe(true);
+    expect(engine.snapshot().time).toBeLessThan(1e-4);
+
+    // A slice with time for them catches up, and nothing was dropped.
+    expect(engine.run(1, Number.POSITIVE_INFINITY)).toBe(false);
+
+    const snapshot = engine.snapshot();
+
+    expect(snapshot.time).toBeCloseTo(1e-3, 12);
+    expect(snapshot.isBehind).toBe(false);
+  });
+
+  test("drops the steps it owes past 100 ms, and says it is behind", () => {
+    let clock = 0;
+
+    mockClock(() => clock + 1);
+
+    const engine = new RunEngine();
+
+    engine.load(1, loaded(RC_LINES), SETTINGS, true);
+    engine.setRunning(true);
+    engine.run(0, 0);
+
+    // Each 50 ms owes 50,000 more steps than the slice takes.
+    for (clock = 50; clock <= 300; clock += 50) {
+      engine.run(clock, 0);
+    }
+
+    clock = 300;
+    engine.run(clock, Number.POSITIVE_INFINITY);
+
+    const snapshot = engine.snapshot();
+
+    // The last 100 ms were made up for; what was owed before them was dropped.
+    expect(snapshot.time).toBeGreaterThan(0.1);
+    expect(snapshot.time).toBeLessThan(0.11);
+    expect(snapshot.isBehind).toBe(true);
   });
 
   test("gives the editor's copies the worker's state", () => {

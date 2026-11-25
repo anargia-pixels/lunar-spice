@@ -56,23 +56,26 @@ function post(message: FromWorker) {
   self.postMessage(message, { transfer });
 }
 
-/** Steps for one slice, then schedules the next: at once while behind, soon otherwise. */
+/**
+ * Steps for one slice, then schedules the next: at once while steps are still owed, soon
+ * otherwise.
+ */
 function pump() {
   isScheduled = false;
 
   const now = performance.now();
 
   if (!engine.isStepping || now - lastFrame > FRAME_TIMEOUT_MS) {
-    engine.run(now, 0);
+    engine.rest();
 
     return;
   }
 
-  const isBehind = engine.run(now, SLICE_MS);
+  const isOwed = engine.run(now, SLICE_MS);
 
   isScheduled = true;
 
-  if (isBehind) {
+  if (isOwed) {
     wake.port2.postMessage(null);
   } else {
     setTimeout(pump, IDLE_MS);

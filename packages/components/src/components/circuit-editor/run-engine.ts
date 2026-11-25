@@ -42,14 +42,16 @@ const PRISTINE_METER = fieldsOf(new SignalMeter());
 const STEPS_PER_CLOCK_CHECK = 8;
 
 /**
- * The longest stretch of real time one call to `run` makes up for. Longer gaps, as after
- * the editor was hidden, resume instead of racing to catch up.
+ * The most real time the run may owe steps for. A slice that runs out of budget, as when
+ * a breakpoint divides a few steps, leaves the rest for the next ones to catch up on.
+ * Steps owed past this are dropped, and longer gaps, as after the editor was hidden,
+ * resume instead of racing to catch up.
  */
 const MAX_CATCH_UP_MS = 100;
 
 /**
- * How long a slice that ran out of budget keeps the behind warning lit. The budget
- * check is per slice, so a single slow slice says nothing; a stretch of them does.
+ * How long dropping steps keeps the behind warning lit, so a circuit that drops a few
+ * every slice shows a steady warning.
  */
 const BEHIND_HOLD_MS = 500;
 
@@ -92,8 +94,8 @@ export class RunEngine {
   private time = 0;
   /** When `run` last stepped, in milliseconds; null after a pause. */
   private lastRun: number | null = null;
-  /** The part of a step carried to the next call. */
-  private stepRemainder = 0;
+  /** Steps owed to real time, carried to the next call: a part of one, or a slice's rest. */
+  private owedSteps = 0;
   /** When the behind warning expires, in milliseconds; 0 while keeping up. */
   private behindUntil = 0;
   private scopes: Scope[] = [];
@@ -221,7 +223,14 @@ export class RunEngine {
 
   setRunning(isRunning: boolean) {
     this.isRunning = isRunning;
+    this.rest();
+  }
+
+  /** Stops following real time until the next `run`, as while the editor is hidden. */
+  rest() {
     this.lastRun = null;
+    this.owedSteps = 0;
+    this.behindUntil = 0;
   }
 
   /** Follows the editor's scopes: new ones start empty, kept ones keep their trace. */
@@ -296,17 +305,17 @@ export class RunEngine {
   }
 
   /**
-   * Steps for the real time since the last call at the set speed, for at most `budgetMs`.
-   * Returns true when it ran out of budget: the circuit is behind real time, and the
-   * steps it could not take are dropped, so a heavy circuit runs slower instead of
-   * falling ever further behind.
+   * Steps for the real time since the last call at the set speed, plus the steps still
+   * owed, for at most `budgetMs`. Returns true when steps are left owed, for another call
+   * at once. A circuit that cannot keep up owes more and more; past `MAX_CATCH_UP_MS` the
+   * steps are dropped, so it runs slower instead of falling ever further behind, and the
+   * behind warning lights.
    */
   run(now: number, budgetMs: number) {
     const { simulation, settings } = this;
 
     if (!simulation || !settings || !this.isStepping) {
-      this.lastRun = null;
-      this.behindUntil = 0;
+      this.rest();
 
       return false;
     }
@@ -317,24 +326,29 @@ export class RunEngine {
     this.lastRun = now;
 
     const { timeStep } = settings;
+    const stepsPerMs = speedMultiplier(settings) / timeStep / 1000;
+    const mostOwed = stepsPerMs * MAX_CATCH_UP_MS;
+    let owed = this.owedSteps + stepsPerMs * elapsed;
 
-    const wanted =
-      (speedMultiplier(settings) / timeStep) * (elapsed / 1000) +
-      this.stepRemainder;
+    if (owed > mostOwed) {
+      owed = mostOwed;
+      this.behindUntil = now + BEHIND_HOLD_MS;
+    }
 
-    const steps = Math.floor(wanted);
+    const steps = Math.floor(owed);
     const deadline = now + budgetMs;
     const { scoped } = this;
-    let isBehind = false;
+    let taken = 0;
 
-    this.stepRemainder = Math.min(wanted - steps, 1);
-
-    for (let step = 0; step < steps; step += 1) {
+    while (taken < steps) {
       if (!simulation.step()) {
         this.error = simulation.error;
         this.faults = simulation.faults;
+        owed = 0;
         break;
       }
+
+      taken += 1;
 
       // Steps leave wires and grounds for snapshots; a scope on one needs every step.
       if (scoped.length > 0) {
@@ -345,22 +359,15 @@ export class RunEngine {
 
       this.sound.pushStep(timeStep);
 
-      if (
-        step % STEPS_PER_CLOCK_CHECK === STEPS_PER_CLOCK_CHECK - 1 &&
-        performance.now() > deadline
-      ) {
-        isBehind = step < steps - 1;
+      if (taken % STEPS_PER_CLOCK_CHECK === 0 && performance.now() > deadline) {
         break;
       }
     }
 
-    if (isBehind) {
-      this.behindUntil = now + BEHIND_HOLD_MS;
-    }
-
+    this.owedSteps = Math.max(0, owed - taken);
     this.time = simulation.time;
 
-    return isBehind;
+    return this.owedSteps >= 1;
   }
 
   private recordScopes(timeStep: number) {

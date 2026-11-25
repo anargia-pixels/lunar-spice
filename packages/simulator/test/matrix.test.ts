@@ -289,6 +289,45 @@ describe("sparse LU with variable entries", () => {
     }
   });
 
+  test("factorizations with the same pivots solve their own values once compiled", () => {
+    const first = matrixOf(constant);
+    const second = matrixOf(constant);
+    const lus = [new LuMatrix(4), new LuMatrix(4)];
+    const systems = [first, second];
+
+    for (const { pattern } of systems) {
+      for (const index of variableIndices) {
+        pattern.addVariable(index);
+      }
+    }
+
+    systems.forEach(({ values, pattern }, index) =>
+      expect(lus[index]?.factor(values, pattern)).toBe(true),
+    );
+
+    // Both compile the same code; their solves interleave with different values.
+    for (let solve = 0; solve < 600; solve += 1) {
+      systems.forEach(({ values, pattern }, index) => {
+        const sign = index === 0 ? 1 : -1;
+        const rows = rowsWith(sign * Math.sin(solve) * 0.5, sign * 0.3);
+        const rhs = [1, index, -2, solve % 5];
+        const result = new Float64Array(4);
+
+        values[0] = rows[0]?.[0] ?? 0;
+        values[5] = rows[1]?.[1] ?? 0;
+        expect(
+          lus[index]?.updateAndSolve(
+            values,
+            pattern,
+            Float64Array.from(rhs),
+            result,
+          ),
+        ).toBe(true);
+        expectClose([...result], denseSolve(rows, rhs));
+      });
+    }
+  });
+
   test("chooses new pivots when a variable pivot vanishes after compiling", () => {
     const { values, pattern } = matrixOf([
       [2, 1],
